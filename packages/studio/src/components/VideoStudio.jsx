@@ -1414,7 +1414,7 @@ export default function VideoStudio({
     } finally {
       hasRestored.current = true;
     }
-  }, [applyControlsForModel, defaultModel.id]);
+  }, [applyControlsForModel, defaultModel.id, PERSIST_KEY]);
 
   // Preserve the MuAPI request id independently of UI preferences so a browser
   // refresh or iOS tab suspension cannot strand a paid video generation.
@@ -1487,6 +1487,7 @@ export default function VideoStudio({
     workflowMediaDrafts,
     prompt,
     localHistory,
+    PERSIST_KEY,
   ]);
 
   // ── Derived UI values ────────────────────────────────────────────────────
