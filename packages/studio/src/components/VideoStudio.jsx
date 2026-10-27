@@ -2145,7 +2145,7 @@ export default function VideoStudio({
       try {
         const result = await pollForResult(pendingJob.requestId, apiKey);
         if (cancelled) return;
-        const url = result.outputs?.[0] || result.url || result.output?.url;
+        const url = result.outputs?.[0] || result.url || result.output?.url || result.output_url || result.video || result.data?.outputs?.[0];
         if (!url) throw new Error(copy.errors.noVideoUrlReturned);
         const entry = {
           id: pendingJob.requestId,
