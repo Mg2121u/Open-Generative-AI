@@ -41,7 +41,7 @@ function includeRequiredArrayDefaults(model, payload) {
     return Object.keys(defaults).length > 0 ? { ...defaults, ...payload } : payload;
 }
 
-async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000) {
+export async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000) {
     return pollForGenerationResult({
         baseUrl: BASE_URL,
         requestId,
