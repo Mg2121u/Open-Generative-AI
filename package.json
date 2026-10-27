@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run build:packages && next build",
     "start": "next start",
     "lint": "next lint",
     "build:studio": "npm run build -w studio",
