@@ -41,7 +41,7 @@ function includeRequiredArrayDefaults(model, payload) {
     return Object.keys(defaults).length > 0 ? { ...defaults, ...payload } : payload;
 }
 
-async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000) {
+export async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000) {
     return pollForGenerationResult({
         baseUrl: BASE_URL,
         requestId,
@@ -78,7 +78,7 @@ async function submitAndPoll(endpoint, payload, key, onRequestId, maxAttempts = 
     if (!requestId) return submitData;
     if (onRequestId) onRequestId(requestId);
     const result = await pollForResult(requestId, key, maxAttempts);
-    const outputUrl = result.outputs?.[0] || result.url || result.output?.url;
+    const outputUrl = result.outputs?.[0] || result.url || result.output?.url || result.output_url || result.video || result.data?.outputs?.[0];
     return normalizePredictionResult(submitData, result, outputUrl);
 }
 
