@@ -78,7 +78,7 @@ async function submitAndPoll(endpoint, payload, key, onRequestId, maxAttempts = 
     if (!requestId) return submitData;
     if (onRequestId) onRequestId(requestId);
     const result = await pollForResult(requestId, key, maxAttempts);
-    const outputUrl = result.outputs?.[0] || result.url || result.output?.url;
+    const outputUrl = result.outputs?.[0] || result.url || result.output?.url || result.output_url || result.video || result.data?.outputs?.[0];
     return normalizePredictionResult(submitData, result, outputUrl);
 }
 
