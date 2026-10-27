@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import toast, { Toaster } from "react-hot-toast";
-import { generateVideo, generateI2V, processV2V, uploadFile } from "../muapi.js";
+import { generateVideo, generateI2V, processV2V, uploadFile, pollForResult } from "../muapi.js";
 import { formatErrorMessage } from "../utils/formatError.js";
 import { scopedPersistKey, migrateLegacyPersistKey } from "../persistKey.js";
 import DrawModal from "./DrawModal.jsx";
@@ -785,6 +785,7 @@ export default function VideoStudio({
   const copy = useMemo(() => resolveCopy(en, zh, locale), [locale]);
   const LEGACY_PERSIST_KEY = "hg_video_studio_persistent";
   const PERSIST_KEY = scopedPersistKey(LEGACY_PERSIST_KEY, apiKey);
+  const PENDING_KEY = `${PERSIST_KEY}:pending-video`;
   useEffect(() => {
     migrateLegacyPersistKey(LEGACY_PERSIST_KEY, PERSIST_KEY);
   }, [PERSIST_KEY]);
@@ -848,6 +849,9 @@ export default function VideoStudio({
   // ── generation / canvas ──
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState(null);
+  const [pendingJob, setPendingJob] = useState(null);
+  const [resuming, setResuming] = useState(false);
+  const [resumeToken, setResumeToken] = useState(0);
   const [fullscreenUrl, setFullscreenUrl] = useState(null);
   const [canvasUrl, setCanvasUrl] = useState(null);
   const [canvasModel, setCanvasModel] = useState(null);
@@ -867,6 +871,10 @@ export default function VideoStudio({
   const [prompt, setPrompt] = useState("");
 
   // ── refs ──
+  const onGenerationCompleteRef = useRef(onGenerationComplete);
+  const onGenerationErrorRef = useRef(onGenerationError);
+  onGenerationCompleteRef.current = onGenerationComplete;
+  onGenerationErrorRef.current = onGenerationError;
   const containerRef = useRef(null);
   const textareaRef = useRef(null);
   const dropdownRef = useRef(null);
@@ -1407,6 +1415,26 @@ export default function VideoStudio({
       hasRestored.current = true;
     }
   }, [applyControlsForModel, defaultModel.id]);
+
+  // Preserve the MuAPI request id independently of UI preferences so a browser
+  // refresh or iOS tab suspension cannot strand a paid video generation.
+  useEffect(() => {
+    if (!apiKey) {
+      setPendingJob(null);
+      return;
+    }
+    try {
+      const restored = JSON.parse(localStorage.getItem(PENDING_KEY) || "null");
+      if (typeof restored?.requestId === "string" && restored.requestId) {
+        setPendingJob(restored);
+        setResumeToken((n) => n + 1);
+      } else {
+        setPendingJob(null);
+      }
+    } catch (error) {
+      console.warn("Failed to restore pending video request:", error);
+    }
+  }, [apiKey, PENDING_KEY]);
 
   // ── Persistence: Save ────────────────────────────────────────────────────
   useEffect(() => {
@@ -2065,11 +2093,38 @@ export default function VideoStudio({
     setOpenDropdown(null);
   }, [handleGroupedSelection, selectedFamily, selectedWorkflowId, selectedModel, selectedResolution, activeWorkflowMediaDraft]);
 
+  const clearPendingJob = useCallback(() => {
+    setPendingJob(null);
+    setResumeToken(0);
+    try {
+      localStorage.removeItem(PENDING_KEY);
+    } catch { /* Storage is optional; the current session still works. */ }
+  }, [PENDING_KEY]);
+
+  const trackPendingJob = useCallback((requestId, modelId, jobPrompt) => {
+    if (!requestId) return;
+    const job = {
+      requestId: String(requestId),
+      model: modelId,
+      prompt: jobPrompt,
+      submittedAt: new Date().toISOString(),
+    };
+    setPendingJob(job);
+    setResumeToken(0); // The initial submit is already polling.
+    try {
+      localStorage.setItem(PENDING_KEY, JSON.stringify(job));
+    } catch (error) {
+      console.warn("Failed to preserve pending video request:", error);
+    }
+  }, [PENDING_KEY]);
+
   // ── add to local history ──────────────────────────────────────────────────
   const addToLocalHistory = useCallback((entry) => {
     setLocalHistory((prev) => [entry, ...prev].slice(0, 30));
     setActiveHistoryIdx(0);
-  }, []);
+    setGenerateError(null);
+    clearPendingJob();
+  }, [clearPendingJob]);
 
   // ── show result in canvas ─────────────────────────────────────────────────
   const showVideoInCanvas = useCallback((url, model) => {
@@ -2078,8 +2133,57 @@ export default function VideoStudio({
     setShowCanvas(true);
   }, []);
 
+  // Resume saved MuAPI jobs on reload without submitting (and charging) again.
+  useEffect(() => {
+    if (!apiKey || !pendingJob?.requestId || !resumeToken || generating) return;
+    let cancelled = false;
+    setResuming(true);
+    setGenerateError(null);
+
+    const resume = async () => {
+      try {
+        const result = await pollForResult(pendingJob.requestId, apiKey);
+        if (cancelled) return;
+        const url = result.outputs?.[0] || result.url || result.output?.url;
+        if (!url) throw new Error(copy.errors.noVideoUrlReturned);
+        const entry = {
+          id: pendingJob.requestId,
+          url,
+          prompt: pendingJob.prompt || "",
+          model: pendingJob.model || selectedModel,
+          timestamp: new Date().toISOString(),
+        };
+        addToLocalHistory(entry);
+        showVideoInCanvas(url, entry.model);
+        onGenerationCompleteRef.current?.({
+          url, model: entry.model, prompt: entry.prompt, type: "video",
+        });
+      } catch (error) {
+        if (cancelled) return;
+        const message = formatErrorMessage(error, copy.errors.videoGenerationFailed);
+        setGenerateError(message);
+        onGenerationErrorRef.current?.(message);
+        if (["failed", "error", "cancelled", "canceled"].includes(error?.generationResult?.status?.toLowerCase())) {
+          clearPendingJob();
+        }
+      } finally {
+        if (!cancelled) setResuming(false);
+      }
+    };
+    void resume();
+    return () => { cancelled = true; };
+  }, [
+    apiKey, pendingJob, resumeToken, generating, selectedModel,
+    addToLocalHistory, showVideoInCanvas, clearPendingJob,
+    copy.errors.noVideoUrlReturned, copy.errors.videoGenerationFailed,
+  ]);
+
   // ── generate ──────────────────────────────────────────────────────────────
   const handleGenerate = useCallback(async () => {
+    if (pendingJob || resuming) {
+      toast.error("A video request is still pending. Check its status or clear it before generating another.");
+      return;
+    }
     if (mediaUploading || workflowUploadSlotRef.current) {
       toast.error(copy.errors.waitForCurrentUpload);
       return;
@@ -2107,6 +2211,7 @@ export default function VideoStudio({
     const capabilities = getModelMediaCapabilities(currentModel);
     const requestSource = selectedVeoTool ? selectedVeoSource : generationSources[selectedFamily.id];
     const trimmedPrompt = promptDisabled ? "" : prompt.trim();
+    const onRequestId = (id) => trackPendingJob(id, selectedModel, trimmedPrompt);
     const workflowMedia = selectedWorkflowId
       ? activeWorkflowMediaDraft || {}
       : {
@@ -2190,6 +2295,7 @@ export default function VideoStudio({
         // remover) and motion-control models (which take video + image + prompt)
         const v2vParams = {
           model: selectedModel,
+          onRequestId,
           ...buildSupplementalInputPayload(currentModel, generationParameterValues),
           ...commonParams,
           ...referenceParams,
@@ -2221,6 +2327,7 @@ export default function VideoStudio({
       } else if (imageMode) {
         const i2vParams = {
           model: selectedModel,
+          onRequestId,
           ...buildSupplementalInputPayload(currentModel, generationParameterValues),
           ...commonParams,
           ...referenceParams,
@@ -2267,6 +2374,7 @@ export default function VideoStudio({
         // T2V (including extend mode)
         const params = {
           model: selectedModel,
+          onRequestId,
           ...buildSupplementalInputPayload(currentModel, generationParameterValues),
           ...commonParams,
           ...referenceParams,
@@ -2317,6 +2425,10 @@ export default function VideoStudio({
     } catch (e) {
       console.error("[VideoStudio]", e);
       const errMsg = formatErrorMessage(e, copy.errors.videoGenerationFailed);
+      setGenerateError(errMsg);
+      if (["failed", "error", "cancelled", "canceled"].includes(e?.generationResult?.status?.toLowerCase())) {
+        clearPendingJob();
+      }
       if (onGenerationError) onGenerationError(errMsg);
       else toast.error(errMsg);
     } finally {
@@ -2326,6 +2438,10 @@ export default function VideoStudio({
   }, [
     apiKey,
     copy,
+    pendingJob,
+    resuming,
+    trackPendingJob,
+    clearPendingJob,
     prompt,
     promptDisabled,
     v2vMode,
@@ -2490,6 +2606,28 @@ export default function VideoStudio({
     >
       {/* ── CENTRAL GALLERY AREA ── */}
       <div className="flex-1 w-full max-w-7xl mx-auto overflow-y-auto custom-scrollbar pb-40 lg:pb-32 px-2">
+        {(pendingJob || generateError) && (
+          <div className="m-3 rounded-lg border border-white/20 bg-black/70 p-4 text-sm text-white" role="status">
+            {pendingJob && (
+              <div>
+                <p className="font-semibold">{generating || resuming ? "Generating your video…" : "Video request saved — awaiting result"}</p>
+                <p className="mt-1 break-all text-xs text-white/70">Request ID: {pendingJob.requestId}</p>
+                <p className="mt-1 text-xs text-white/70">If you leave or refresh this page, the request can be checked again without generating a second clip.</p>
+                <div className="mt-3 flex flex-wrap gap-3">
+                  <button type="button" className="rounded border border-white/30 px-3 py-1.5 disabled:opacity-40"
+                    disabled={generating || resuming} onClick={() => setResumeToken((n) => n + 1)}>
+                    Check result
+                  </button>
+                  <button type="button" className="rounded border border-white/30 px-3 py-1.5 disabled:opacity-40"
+                    disabled={generating || resuming} onClick={clearPendingJob}>
+                    Remove from list
+                  </button>
+                </div>
+              </div>
+            )}
+            {generateError && <p className="mt-2 break-words text-red-300">{generateError}</p>}
+          </div>
+        )}
         {history.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full pt-4 animate-fade-in-up">
             {history.map((entry, idx) => {
@@ -3397,7 +3535,7 @@ export default function VideoStudio({
             {/* Generate button */}
             <PromptAction
               onClick={handleGenerate}
-              disabled={generating || mediaUploading || (selectedTool?.group === "continueGenerated" && !hasContinuationSource) || (selectedVeoTool && !selectedVeoSource)}
+              disabled={generating || resuming || Boolean(pendingJob) || mediaUploading || (selectedTool?.group === "continueGenerated" && !hasContinuationSource) || (selectedVeoTool && !selectedVeoSource)}
             >
               {generating ? (
                 <>
