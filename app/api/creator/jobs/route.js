@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { validateCreatorRequest, wavespeedRequest } from "@/lib/creator/wavespeed";
+import { applyReferenceDefaults, referenceForCreator } from "@/lib/creator/references";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +32,8 @@ export async function POST(request) {
   if (!hasAccess(request)) return reply({ error: "Unauthorized." }, 401);
   try {
     const maxSeconds = Number(process.env.CREATOR_MAX_VIDEO_SECONDS || 10);
-    const job = validateCreatorRequest(await request.json(), maxSeconds);
+    const requestBody = await request.json();
+    const job = validateCreatorRequest(applyReferenceDefaults(requestBody), maxSeconds);
     const result = await wavespeedRequest(
       process.env.WAVESPEED_API_KEY, job.endpoint, job.payload
     );
@@ -51,7 +53,14 @@ export async function POST(request) {
 export async function GET(request) {
   if (!configured()) return reply({ error: "Creator service is not configured." }, 503);
   if (!hasAccess(request)) return reply({ error: "Unauthorized." }, 401);
-  const id = new URL(request.url).searchParams.get("id") || "";
+  const params = new URL(request.url).searchParams;
+  if (params.get("reference") === "1") {
+    const creator = params.get("creator");
+    if (creator !== "aria" && creator !== "nicole") return reply({ error: "Invalid creator." }, 400);
+    const url = referenceForCreator(creator);
+    return reply({ creator, configured: Boolean(url), reference_url: url });
+  }
+  const id = params.get("id") || "";
   if (!/^[a-zA-Z0-9_-]{8,128}$/.test(id)) return reply({ error: "Invalid prediction ID." }, 400);
   try {
     const result = await wavespeedRequest(
