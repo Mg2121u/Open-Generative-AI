@@ -118,7 +118,7 @@ export default function CreatorStudio() {
           </label>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14 }}>
             <label style={label}>Character
-              <select style={field} value={creator} onChange={event => setCreator(event.target.value)}>
+              <select style={field} value={creator} onChange={event => { setCreator(event.target.value); setReference(""); setLastImage(""); setVideos(""); setAudios(""); setJob(null); }}>
                 <option value="aria">Aria</option>
                 <option value="nicole">Nicole</option>
               </select>
