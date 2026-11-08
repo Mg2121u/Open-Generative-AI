@@ -92,3 +92,18 @@ https://wavespeed.ai/models/bytedance/seedream-v5.0-pro
 https://wavespeed.ai/models/bytedance/seedream-v5.0-pro/edit
 https://wavespeed.ai/models/alibaba/wan-3.0/image-to-video
 https://wavespeed.ai/models/alibaba/wan-3.0/reference-to-video
+
+## Canonical character references (preview)
+
+For the creator branch, configure:
+
+- `ARIA_REFERENCE_IMAGE_URL`: Aria's direct public object URL from Supabase Storage `character-assets/IMG_5317.PNG`.
+- `NICOLE_REFERENCE_IMAGE_URL`: Nicole's established direct public object URL from Supabase Storage `characters/059b820d86494f16829a1650a1f23b14.jpeg`.
+
+These are deployment environment variables, not code constants. Both belong to Preview and can be updated independently without changing the repository. Do not use Supabase dashboard preview URLs or expiring signed URLs here.
+
+The Creator Studio reads the selected creator's reference from an authenticated metadata endpoint and shows its thumbnail. The server automatically injects that reference into Seedream Edit, Wan image-to-video, and Wan reference-to-video requests when no custom reference image is supplied. Text-to-image and text-to-video modes remain text-only and do not claim to preserve a character's exact likeness.
+
+When switching from Aria to Nicole or back, the page clears custom reference fields immediately. Models accept the current character's reference only, unless the creator deliberately provides an override. For paid or unattended fan workflows, implement a server-side override authorization rule before connecting fans, since a free-form override supplied by an authorized client should not be treated as the creator's canonical identity.
+
+Reference isolation regression tests: `node --test tests/wavespeed-creator.test.mjs tests/creator-references.test.mjs`.
