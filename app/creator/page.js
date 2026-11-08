@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const MODELS = [
   ["seedream-image", "Seedream 5.0 Pro — Image"],
@@ -34,6 +34,43 @@ export default function CreatorStudio() {
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
+  const [storedReference, setStoredReference] = useState(null);
+  const [referenceStatus, setReferenceStatus] = useState("");
+
+  useEffect(() => {
+    const secret = token.trim();
+    setStoredReference(null);
+    if (secret.length < 20) {
+      setReferenceStatus("");
+      return;
+    }
+    let inactive = false;
+    const controller = new AbortController();
+    setReferenceStatus("Checking saved reference…");
+    const timeout = setTimeout(async () => {
+      try {
+        const response = await fetch("/api/creator/jobs?reference=1&creator=" + creator, {
+          headers: { Authorization: "Bearer " + secret },
+          cache: "no-store",
+          signal: controller.signal
+        });
+        const data = await readJson(response);
+        if (!inactive) {
+          setStoredReference(data.reference_url || null);
+          setReferenceStatus(data.configured ? "Saved reference ready" : "No saved reference configured");
+        }
+      } catch (problem) {
+        if (!inactive) {
+          setReferenceStatus("Reference unavailable: " + (problem.message || "request failed"));
+        }
+      }
+    }, 450);
+    return () => {
+      inactive = true;
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, [creator, token]);
 
   const isVideo = model.startsWith("wan-");
   const needsImages = model === "seedream-edit" || model === "wan-image-video" || model === "wan-reference-video";
@@ -118,7 +155,7 @@ export default function CreatorStudio() {
           </label>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14 }}>
             <label style={label}>Character
-              <select style={field} value={creator} onChange={event => { setCreator(event.target.value); setReference(""); setLastImage(""); setVideos(""); setAudios(""); setJob(null); }}>
+              <select style={field} value={creator} onChange={event => { setCreator(event.target.value); setReference(""); setLastImage(""); setVideos(""); setAudios(""); setJob(null); setStoredReference(null); }}>
                 <option value="aria">Aria</option>
                 <option value="nicole">Nicole</option>
               </select>
@@ -133,6 +170,41 @@ export default function CreatorStudio() {
               </select>
             </label>
           </div>
+          <section aria-label="Saved character reference" style={{
+            padding: 14, borderRadius: 12, border: "1px solid #46526b",
+            background: "#111a2b"
+          }}>
+            <div style={{ color: "#cbd5e1", fontWeight: 700, marginBottom: 10 }}>
+              {creator === "aria" ? "Aria" : "Nicole"} — automatic reference
+            </div>
+            {storedReference ? (
+              <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                <img src={storedReference} alt={creator + " canonical reference"} style={{
+                  width: 94, height: 120, borderRadius: 10, objectFit: "cover",
+                  border: "1px solid #64748b"
+                }} />
+                <div style={{ flex: 1, minWidth: 160 }}>
+                  <p style={{ marginBottom: 8, color: "#5eead4" }}>Saved reference ready</p>
+                  <p style={{ fontSize: 13, color: "#cbd5e1" }}>
+                    Automatically added to Seedream Edit and Wan image/reference-to-video.
+                    No need to paste the URL.
+                  </p>
+                  <a href={storedReference} target="_blank" rel="noreferrer" style={{
+                    color: "#a5b4fc", fontSize: 12
+                  }}>Open reference photo</a>
+                </div>
+              </div>
+            ) : (
+              <p style={{ color: "#94a3b8", fontSize: 13 }}>{referenceStatus ||
+                "Enter your creator access token to display the saved reference."}</p>
+            )}
+            {(model === "seedream-image" || model === "wan-text-video") && (
+              <p style={{ color: "#fcd34d", fontSize: 12, marginTop: 10 }}>
+                This text-only model cannot use the identity reference.
+                Select Seedream Reference Edit or Wan Image to Video for likeness consistency.
+              </p>
+            )}
+          </section>
           <label style={label}>Prompt
             <textarea style={{ ...field, minHeight: 126 }} required value={prompt}
               placeholder="Describe the scene, wardrobe, lighting, motion and composition."
@@ -140,9 +212,9 @@ export default function CreatorStudio() {
           </label>
           {needsImages && (
             <label style={label}>
-              {model === "wan-image-video" ? "Start-frame HTTPS image URL" : "Reference image HTTPS URLs (one per line)"}
+              {model === "wan-image-video" ? "Optional start-frame URL override" : "Optional reference image URL override(s) — one per line"}
               <textarea style={{ ...field, minHeight: 72 }} value={reference}
-                placeholder="https://your-storage.example/character-reference.jpg"
+                placeholder="Leave blank to use the saved character image automatically"
                 onChange={event => setReference(event.target.value)} />
             </label>
           )}
