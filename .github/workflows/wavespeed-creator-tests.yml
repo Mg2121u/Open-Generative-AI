@@ -1,0 +1,27 @@
+name: WaveSpeed creator contract tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "lib/creator/**"
+      - "app/api/creator/**"
+      - "app/creator/**"
+      - "tests/wavespeed-creator.test.mjs"
+      - ".github/workflows/wavespeed-creator-tests.yml"
+  push:
+    branches: [feature/wavespeed-creator-pipeline]
+
+permissions:
+  contents: read
+
+jobs:
+  test-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate WaveSpeed creator request contracts
+        run: node --test tests/wavespeed-creator.test.mjs
