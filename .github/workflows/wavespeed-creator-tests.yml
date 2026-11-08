@@ -8,6 +8,7 @@ on:
       - "app/api/creator/**"
       - "app/creator/**"
       - "tests/wavespeed-creator.test.mjs"
+      - "tests/creator-references.test.mjs"
       - ".github/workflows/wavespeed-creator-tests.yml"
   push:
     branches: [feature/wavespeed-creator-pipeline]
@@ -24,4 +25,4 @@ jobs:
         with:
           node-version: "22"
       - name: Validate WaveSpeed creator request contracts
-        run: node --test tests/wavespeed-creator.test.mjs
+        run: node --test tests/wavespeed-creator.test.mjs tests/creator-references.test.mjs
