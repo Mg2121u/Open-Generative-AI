@@ -40,3 +40,72 @@ block = block.replace(
 )
 path.write_text(source[:start] + block + source[end:])
 print("RECREATION_VOICE_FIX available_api_does_not_block_original_audio=True", flush=True)
+
+# The app must NEVER accidentally reuse older v2 paid segments or a first-canary
+# image generated before its current scenery/outfit settings. Retain old outputs,
+# but namespace all auto-app renders with a separate opt-in RUN_KEY.
+path = ROOT / "full_video.py"
+source = path.read_text()
+old_key = "RUN_KEY = 'nicole_full_480p_continuity_v2_20261115'"
+new_key = "RUN_KEY = os.getenv('RECREATION_RUN_KEY', 'nicole_full_480p_continuity_v2_20261115')"
+assert source.count(old_key) == 1, "Unexpected historic run key"
+source = source.replace(old_key, new_key, 1)
+first_canary = "def _reusable_canary(job):"
+assert source.count(first_canary) == 1, "Unexpected first-canary reuse function"
+source = source.replace(
+    first_canary,
+    first_canary + "\n    # Fresh app runs must honor the current scenery/outfit, not an old canary.\n"
+    "    if os.getenv('RECREATION_RUN_KEY'):\n"
+    "        return False\n",
+    1,
+)
+path.write_text(source)
+print("RECREATION_RUN_ISOLATION new_run_namespace_supported=True first_canary_reuse_disabled=True", flush=True)
+
+# Owner-driven recovery for an explicit failed config-only preflight.
+# Never automatically resume unknown NEEDS_REVIEW states, or any unsettled
+# provider request. Preserve source/identity/media and completed old outputs.
+path = ROOT / "db.py"
+source = path.read_text()
+start = source.index("def resume(")
+end = source.index("def cancel(", start)
+block = source[start:end]
+anchor = "WHERE job_id=%s AND owner_id=%s AND state='FAILED' RETURNING *"
+replacement = (
+    "WHERE job_id=%s AND owner_id=%s AND (state='FAILED' OR ("
+    "state='NEEDS_REVIEW' AND stage='AUTO_PREFLIGHT' "
+    "AND last_error='Per-video spending cap configuration invalid' "
+    "AND original_key IS NOT NULL "
+    "AND NOT EXISTS (SELECT 1 FROM recreation_steps rs "
+    "WHERE rs.job_id=recreation_jobs.job_id "
+    "AND rs.state IN ('SUBMITTING','SUBMITTED','UNCERTAIN'))"
+    ")) RETURNING *"
+)
+assert block.count(anchor) == 1, "Unexpected resume SQL guard"
+block = block.replace(anchor, replacement, 1)
+block = block.replace(
+    "lease_owner=NULL,updated_at=now()",
+    "lease_owner=NULL,last_error=NULL,updated_at=now()",
+    1,
+)
+path.write_text(source[:start] + block + source[end:])
+print("RECREATION_RECOVERY explicit_review_resume_enabled=True unsettled_steps_protected=True", flush=True)
+
+# Let /generate recover ONLY the now-resolved config-review path, preserving
+# the existing public command and original owner authorization model.
+path = ROOT / "telegram.py"
+source = path.read_text()
+start = source.index("    if cmd=='/generate':")
+end = source.index("    if cmd=='/resume':", start)
+block = source[start:end]
+queue_line = "updated=db.queue_job(job['job_id'],owner)"
+assert block.count(queue_line) == 1, "Unexpected Telegram /generate handler"
+block = block.replace(
+    queue_line,
+    queue_line + "\n"
+    "        if not updated and job.get('state') == 'NEEDS_REVIEW' and job.get('stage') == 'AUTO_PREFLIGHT':\n"
+    "            updated=db.resume(job['job_id'],owner)",
+    1,
+)
+path.write_text(source[:start] + block + source[end:])
+print("RECREATION_RECOVERY generate_command_can_resume_config_review=True", flush=True)
