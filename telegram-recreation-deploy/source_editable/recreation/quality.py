@@ -45,7 +45,7 @@ def quality_plan(duration, *, max_clips=2400):
         raise ValueError('Invalid source duration') from None
     if not math.isfinite(duration) or not 2 <= duration <= 7200:
         raise ValueError('Unsupported source duration')
-    clips = min(max_clips, max(1, min(int(duration // 2), round(duration / 2.5))))
+    clips = min(max_clips, max(1, math.ceil(duration / 3.99)))
     if not clips:
         raise ValueError('Invalid quality plan')
     sizes = [round(duration / clips, 3)] * clips
@@ -140,7 +140,14 @@ def build_prompt(job, *, chained=False):
         'skin texture swimming, motion smear, ghosting, overlapping bodies or scene cuts. '
         'If a pose is difficult, simplify small details rather than deform anatomy. '
         'Natural realistic movement, one continuous shot, steady camera and stable scale. '
-        'Preserve exact scene and wardrobe throughout. Generate NO new audio.'
+        'Preserve exact scene and wardrobe throughout. '
+        'ABSOLUTELY NO visible writing or graphics: remove all account names, '
+        'usernames, social-media handles, Instagram/TikTok icons, logos, '
+        'watermarks, captions, subtitles, labels, stickers, signage copied '
+        'from the video, interface controls, badges or graphic overlays. '
+        'Any such marks in Video 1 are editing artifacts, not scenery or '
+        'choreography; do not reproduce them. No words or symbols anywhere. '
+        'Generate NO new audio.'
     )
     extra = _clean(job.get('instructions'), 380)
     return (identity + motion + scene_instruction(job) + outfit_instruction(job)
