@@ -23,7 +23,7 @@ def trim(source,output,start,duration):
     if float(start)<0 or float(duration)<=0: raise ValueError('Invalid trim interval')
     run('ffmpeg','-hide_banner','-loglevel','error','-y',
         '-ss',str(start),'-i',str(source),'-t',str(duration),
-        '-map','0:v:0','-an','-c:v','libx264','-preset','veryfast','-crf','19',
+        '-map','0:v:0','-an','-c:v','libx264','-preset','medium','-crf','17',
         '-pix_fmt','yuv420p','-movflags','+faststart',str(output))
     return probe(output)
 
@@ -36,7 +36,7 @@ def normalize(source,output,*,width=480,height=854,with_audio=True):
         cmd+=['-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100']
     cmd+=['-map','0:v:0']
     if with_audio: cmd+=['-map','0:a:0' if src['has_audio'] else '1:a:0']
-    cmd+=['-vf',vf,'-c:v','libx264','-preset','veryfast','-crf','23',
+    cmd+=['-vf',vf,'-c:v','libx264','-preset','medium','-crf','16',
           '-pix_fmt','yuv420p','-movflags','+faststart']
     if with_audio: cmd+=['-c:a','aac','-ar','44100','-ac','2','-t',str(src['duration'])]
     else:cmd+=['-an']
