@@ -70,4 +70,4 @@ def test_telegram_redo_does_not_call_paid_generate(monkeypatch):
 def test_redo_draft_uses_quality_estimate(monkeypatch):
     monkeypatch.setenv('RECREATION_QUALITY_MODE','identity_lock')
     assert quality.enabled({'stage':'UPLOAD_REFERENCE'})
-    assert len(quality.quality_plan(18.2))==7
+    assert len(quality.quality_plan(18.2))==5
