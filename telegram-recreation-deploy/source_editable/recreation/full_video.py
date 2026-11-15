@@ -275,7 +275,7 @@ def _prepare_reference(job, segment):
     return key
 
 
-def _merge_original_sound(job, segments, keys, *, destination_override=None, motion_aware=False):
+def _merge_original_sound(job, segments, keys, *, destination_override=None, motion_aware=False, force_no_warp=False):
     """Locally smooth joins with previous frame, preserving original audio sync."""
     job_id=str(job['job_id']); destination=destination_override or final_key(job_id)
     if _stored(destination): return destination
@@ -296,8 +296,9 @@ def _merge_original_sound(job, segments, keys, *, destination_override=None, mot
                 next_first=root/f'boundary_{seg["index"]:03}_first.jpg'
                 adjusted=root/f'continuity_{seg["index"]:03}.mp4'
                 ffmpeg.extract_last_frame(clips[-1],prev_end)
-                if (os.getenv('RECREATION_QUALITY_MODE','').lower()=='identity_lock'
-                        and os.getenv('RECREATION_SEAM_MODE','').lower()=='cut_no_warp'):
+                if (force_no_warp or
+                    (os.getenv('RECREATION_QUALITY_MODE','').lower()=='identity_lock'
+                     and os.getenv('RECREATION_SEAM_MODE','').lower()=='cut_no_warp')):
                     # Existing 250ms dense optical flow can deform Nicole's
                     # face, hands, skirt and limbs. Do not synthesize anatomy
                     # to conceal a bad model boundary. Compare RAW frames.
@@ -470,13 +471,13 @@ def _run_segments(job,info,*,guard):
     return 'completed'
 
 
-def _deliver_once(job, key):
+def _deliver_once(job, key, *, delivery_key=None, caption=None):
     """At-most-once Telegram DM delivery; archive survives Telegram failure.
 
     An uncertain sendMessage/sendVideo outcome is never blindly retried.
     """
     job_id=str(job['job_id'])
-    delivery_key=f'{RUN_KEY}_telegram_delivery'
+    delivery_key=delivery_key or f'{RUN_KEY}_telegram_delivery'
     previous=db.get_step(job_id,delivery_key)
     if previous:
         if previous['state']=='COMPLETED': return
@@ -486,8 +487,65 @@ def _deliver_once(job, key):
         raise provider.NeedsReview('Telegram delivery was reserved by another worker')
     try:
         result=telegram.telegram('sendVideo',{'chat_id':job['chat_id'], 'video':storage.presign(key,3600),
-            'caption':'Nicole continuity recreation finished. Original soundtrack restored. 480p staging.'})
+            'caption':(caption or 'Nicole recreation finished. Original soundtrack restored. 480p staging.')})
         db.external_finished(job_id,delivery_key,{'message_id':result.get('message_id')})
     except Exception as exc:
         raise provider.NeedsReview('Final file archived, but Telegram delivery needs manual inspection') from exc
 
+
+
+# The former identity-lock v3 generated thirteen already PAID 4s segments
+# before rejecting a harmless full-frame seam metric. This explicit salvage
+# pathway never calls WaveSpeed, ElevenLabs, or any model provider.
+SALVAGE_SOURCE_RUN_KEY = 'telegram_recreation_cleangraphics_v3_20261115'
+SALVAGE_OUTPUT_VERSION = 'local_hardcuts_v1'
+
+
+def salvage_existing_v3(job):
+    """Join only archived completed outputs; no paid submissions or regen.
+
+    It cannot remove morphing that already exists INSIDE a Wan clip, but
+    delivers a source-audio-synced recovered video for review.
+    """
+    if job.get('stage') != 'SALVAGE' or job.get('state') not in ('RUNNING','WAITING_PROVIDER'):
+        raise RuntimeError('Salvage must be explicitly queued by the authorized owner')
+    if job.get('character')!='NICOLE' or not job.get('original_key'):
+        raise RuntimeError('Saved Nicole source is required')
+    job_id=str(job['job_id'])
+    cp=(job.get('checkpoint') or {}).get('local_preflight') or {}
+    original=(cp.get('source_probe') or {})
+    if cp.get('source_key')!=job['original_key'] or not cp.get('complete'):
+        raise RuntimeError('Archived source preflight missing')
+    duration=round(float(original.get('duration') or 0),3)
+    n=math.ceil(duration/3.99)
+    if n!=int(job['segment_total']) or not 1<=n<=MAX_CLIPS:
+        raise RuntimeError('Old saved segment count does not match source')
+    lengths=[round(duration/n,3)]*n
+    lengths[-1]=round(duration-sum(lengths[:-1]),3)
+    at=0.0
+    segments=[];keys=[]
+    for index,length in enumerate(lengths):
+        if not 2<=length<=3.99:
+            raise RuntimeError('Unexpected saved segment timeline')
+        step=db.get_step(job_id,f'wan_{SALVAGE_SOURCE_RUN_KEY}_segment_{index:03}')
+        if not step or step.get('state')!='COMPLETED':
+            raise provider.NeedsReview('A paid source segment is missing or not completed; no regeneration attempted')
+        key=f'recreation/{job_id}/full_video/{SALVAGE_SOURCE_RUN_KEY}/segments/{index:03}.mp4'
+        if not _stored(key):
+            raise provider.NeedsReview('A completed source segment is missing from storage; no regeneration attempted')
+        segments.append({'index':index,'start':round(at,3),'duration':length})
+        keys.append(key)
+        at+=length
+    destination=(f'recreation/{job_id}/full_video/{SALVAGE_SOURCE_RUN_KEY}/'
+                 f'{SALVAGE_OUTPUT_VERSION}/nicole_with_original_audio.mp4')
+    _merge_original_sound(job,segments,keys,destination_override=destination,
+                          force_no_warp=True,motion_aware=False)
+    _deliver_once(
+        job,destination,
+        delivery_key=f'{SALVAGE_SOURCE_RUN_KEY}_{SALVAGE_OUTPUT_VERSION}_telegram_delivery',
+        caption=('Recovered 13 already-paid 480p segments with source audio and no '
+                 'AI regeneration. The cuts are unwarped; character drift already '
+                 'inside the generated clips may remain.'),
+    )
+    LOGGER.info('SALVAGE completed=true reused_paid_clips=%d new_provider_calls=0',n)
+    return 'completed'
