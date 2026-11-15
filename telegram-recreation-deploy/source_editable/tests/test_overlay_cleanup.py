@@ -76,8 +76,8 @@ def test_no_forced_logo_cleanup_on_unrecognized_source():
 
 def test_longer_shots_reduce_recompression_and_preserve_duration():
     segments=quality.quality_plan(18.2)
-    assert len(segments)==5
-    assert [s['output_seconds'] for s in segments]==[4]*5
+    assert len(segments)==3
+    assert [s['output_seconds'] for s in segments]==[7]*3
     assert abs(sum(s['duration'] for s in segments)-18.2)<.01
 
 
