@@ -1,0 +1,40 @@
+name: Unpack recreation source for maintainable QA fix
+on:
+  push:
+    branches: [feature/telegram-video-recreation-app-20261114]
+    paths:
+      - .github/workflows/unpack-recreation-studio-source.yml
+permissions:
+  contents: write
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Expand only application source and unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/recreation-source
+          tar -xJf telegram-recreation-deploy/source.tar.xz -C /tmp/recreation-source --strip-components=1
+          mkdir -p telegram-recreation-deploy/source_editable
+          cp -a /tmp/recreation-source/recreation telegram-recreation-deploy/source_editable/
+          cp -a /tmp/recreation-source/tests telegram-recreation-deploy/source_editable/
+          cp /tmp/recreation-source/requirements.txt telegram-recreation-deploy/source_editable/
+          printf 'Editable extract of source.tar.xz; runtime still uses archive + patches.\n' > telegram-recreation-deploy/source_editable/README.txt
+          find telegram-recreation-deploy/source_editable -type f \( -name '*.env' -o -name '*secret*' -o -name '*.key' \) -delete
+          find telegram-recreation-deploy/source_editable -type d -name __pycache__ -prune -exec rm -rf {} +
+          find telegram-recreation-deploy/source_editable -type f -name '*.pyc' -delete
+      - name: Commit extracted source to this feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add telegram-recreation-deploy/source_editable
+          if ! git diff --staged --quiet; then
+            git commit -m "Unpack recreation app source for quality fixes"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
