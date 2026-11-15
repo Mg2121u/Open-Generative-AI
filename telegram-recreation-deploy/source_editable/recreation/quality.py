@@ -24,7 +24,7 @@ PHOTO_OUTFIT = {'same as reference image', 'the same as her identity image',
 
 def enabled(job):
     return (os.getenv('RECREATION_QUALITY_MODE', '').strip().lower() == QUALITY_MODE
-            and job.get('stage') in ('AUTO_PREFLIGHT', 'AUTO_GENERATE'))
+            and job.get('stage') in ('UPLOAD_REFERENCE', 'AUTO_PREFLIGHT', 'AUTO_GENERATE'))
 
 
 def _clean(text, limit=260):
