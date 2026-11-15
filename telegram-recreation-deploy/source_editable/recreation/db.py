@@ -39,6 +39,45 @@ def create_draft(chat_id, owner_id):
     return str(job_id)
 
 
+
+def create_redo_from_latest(chat_id, owner_id):
+    """Create an UNBILLED quality-redo draft from this owner's latest finished video.
+
+    Reuses the exact original media and archived Nicole identity. All previous
+    outputs and provider steps remain immutable. Only a subsequent /generate
+    permits new billable model work on the new job ID.
+    """
+    job_id = uuid.uuid4()
+    with connect() as conn:
+        previous = conn.execute("""SELECT job_id, character, model, source_file_id,
+            original_key, scenery, outfit, instructions, voiceover_voice,
+            checkpoint FROM recreation_jobs
+            WHERE owner_id=%s AND state='COMPLETED'
+              AND character='NICOLE' AND source_file_id IS NOT NULL
+              AND original_key IS NOT NULL
+              AND checkpoint#>>'{identity,status}'='ready'
+              AND checkpoint#>>'{identity,nicole_image_key}' IS NOT NULL
+            ORDER BY created_at DESC LIMIT 1""", (owner_id,)).fetchone()
+        if not previous:
+            return None
+        cp = {'identity': previous['checkpoint']['identity']}
+        prior_preflight=(previous['checkpoint'] or {}).get('local_preflight') or {}
+        if (prior_preflight.get('complete')
+                and prior_preflight.get('source_key') == previous['original_key']):
+            cp['local_preflight']=prior_preflight
+        row=conn.execute("""INSERT INTO recreation_jobs
+            (job_id, chat_id, owner_id, character, model, source_file_id,
+             original_key, scenery, outfit, instructions, voiceover_voice,
+             checkpoint, stage)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'UPLOAD_REFERENCE')
+            RETURNING job_id""", (
+            job_id, chat_id, owner_id, previous['character'],
+            previous['model'], previous['source_file_id'],
+            previous['original_key'], previous['scenery'], previous['outfit'],
+            previous['instructions'], previous['voiceover_voice'], Jsonb(cp),
+        )).fetchone()
+    return {'job_id': str(row['job_id']), 'from_job': str(previous['job_id'])}
+
 def get_job(job_id, owner_id=None):
     with connect() as conn:
         return conn.execute('SELECT * FROM recreation_jobs WHERE job_id = %s AND (%s::bigint IS NULL OR owner_id = %s)',
