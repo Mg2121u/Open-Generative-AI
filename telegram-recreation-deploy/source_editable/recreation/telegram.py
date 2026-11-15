@@ -70,7 +70,7 @@ def process_message(message):
     if not ALLOWED_USERS or int(owner) not in ALLOWED_USERS:
         say(chat,'This app is private. Send /id to retrieve your ID for access.'); return
     if cmd in ('/start','/help'):
-        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
+        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
         return
     if cmd=='/new':
         job=db.create_draft(chat,owner)
@@ -188,7 +188,7 @@ def process_message(message):
                 f'New Wan generations: {rpt["generated_sections"]}\n'
                 f'Estimated additional 480p cost: ${rpt["remaining_estimate_usd"]:.2f}\n'
                 f'Final audio: original source soundtrack\n'
-                f'Continuity: {"original-frame chaining, no optical-flow warping" if os.getenv("RECREATION_QUALITY_MODE","").lower()=="identity_lock" else "previous generated last frame + local seam blending"}\n'
+                f'Continuity: {"canonical Nicole photo reset per segment, hard cuts, no warp" if os.getenv("RECREATION_QUALITY_MODE","").lower()=="identity_lock" else "legacy chained frames + local seam blending"}\n'
                 'Charges occur only after /generate; actual provider billing may differ.')
         except (ValueError,KeyError,TypeError) as exc:
             say(chat, 'Full-video plan unavailable: '+str(exc)[:350])
@@ -209,7 +209,10 @@ def process_message(message):
         if (job.get('voiceover_text') or '').strip():
             say(chat,'This verified continuity mode preserves the original soundtrack. Set /voiceover off before /generate.');return
         updated=db.queue_job(job['job_id'],owner)
-        say(chat,'Generation queued. Your source will be archived and continuity-chained automatically. Use /status to track it.' if updated else 'Send a source MP4 to your draft first.');return
+        say(chat,'Generation queued with Nicole identity reset on every segment. Saved source and original audio preserved. Use /status to track it.' if updated else 'Send a source MP4 to your draft first.');return
+    if cmd=='/salvage':
+        updated=db.queue_salvage(job['job_id'],owner)
+        say(chat,('Local recovery queued: assembling ALL the already-paid clips without a new Wan generation. Original sound will be restored; existing AI face drift may remain. Use /status.' if updated else 'Only the saved completed-segments seam-review job can be recovered without new provider calls.'));return
     if cmd=='/resume':
         updated=db.resume(job['job_id'],owner)
         say(chat,'Failed stage queued for recovery. Completed segments will not be regenerated.' if updated else 'Only a known failed job can be resumed. An uncertain provider submission requires review to avoid duplicate charges.');return
