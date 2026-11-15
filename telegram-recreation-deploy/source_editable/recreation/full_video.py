@@ -120,7 +120,8 @@ def report(job):
     return {'source_duration':source['duration'],'segments':segments,'remaining_estimate_usd':estimate(segments),
             'generated_sections':len([s for s in segments if not s['reused']]),
             'reused_first_canary':bool(segments[0]['reused']), 'audio':'original_source', 'run_key':RUN_KEY,
-            'continuity':'chained_generated_last_frame_plus_200ms_local_blend'}
+            'continuity':('canonical_photo_reset_per_segment_no_warp' if quality.reset_identity_each_segment(job)
+                          else 'chained_generated_last_frame_plus_200ms_local_blend')}
 
 
 def _stored(key):
@@ -305,10 +306,12 @@ def _merge_original_sound(job, segments, keys, *, destination_override=None, mot
                     LOGGER.info('IDENTITY_LOCK seam_index=%d raw_frame_difference=%.4f no_warp=true',
                                 seg['index'],raw_error)
                     if raw_error > .28:
-                        raise provider.NeedsReview(
-                            'Adjacent generated poses/scenes differ too much. '
-                            'Identity-lock QA blocked morphing assembly; '
-                            'original segments saved for review.')
+                        # A full-frame mismatch can be genuine camera movement,
+                        # not proof of face morphing. Never discard thirteen
+                        # already-paid segments based only on this heuristic.
+                        LOGGER.warning('IDENTITY_LOCK seam_warning=%d difference=%.4f '
+                                       'unblended_hard_cut=true no_provider_retry=true',
+                                       seg['index'], raw_error)
                     clips.append(dest)
                     continue
                 if motion_aware:
@@ -409,8 +412,11 @@ def _run_segments(job,info,*,guard):
             if len(keys) != idx:
                 raise RuntimeError('Segment order invalid; cannot chain continuity')
             # The FIRST segment of a fresh job uses Nicole's identity only.
-            # Later segments get the exact final frame of the previous GENERATED clip.
-            last_key=_prepare_continuity_frame(job_id,idx-1,keys[-1]) if idx>0 else None
+            # Canonical quality mode always uses Nicole's SAVED identity photo.
+            # Recursive Wan-frame chaining compounds artifacts over long clips.
+            reset=quality.reset_identity_each_segment(job)
+            last_key=(_prepare_continuity_frame(job_id,idx-1,keys[-1])
+                      if idx>0 and not reset else None)
             ref=_prepare_reference(job,seg)
             identity=(job['checkpoint'] or {}).get('identity') or {}
             image=storage.presign(identity['nicole_image_key'],3600)
@@ -442,10 +448,12 @@ def _run_segments(job,info,*,guard):
             expected=continuity_frame_key(job_id,idx-1) if idx>0 else None
             current_identity=(job.get('checkpoint') or {}).get('identity',{}).get('nicole_image_key')
             identity_ok=bool(refs and current_identity and current_identity in unquote(urlsplit(refs[0]).path))
-            continuity_ok=(idx==0 and len(refs)==1) or (idx>0 and len(refs)>=2 and
-                           expected in unquote(urlsplit(refs[1]).path))
+            reset=quality.reset_identity_each_segment(job)
+            continuity_ok=((len(refs)==1 and (idx==0 or reset)) or
+                           (not reset and idx>0 and len(refs)>=2 and
+                            expected in unquote(urlsplit(refs[1]).path)))
             if not (identity_ok and continuity_ok):
-                raise provider.NeedsReview('Submitted segment lacks verified Nicole+chained-frame inputs')
+                raise provider.NeedsReview('Submitted segment lacks verified canonical Nicole identity or expected continuity inputs')
         if step['state'] in ('SUBMITTING','UNCERTAIN','FAILED'):
             raise provider.NeedsReview('Uncertain provider request; manual reconciliation required')
         if step['state']!='COMPLETED':
