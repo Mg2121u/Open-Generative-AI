@@ -159,6 +159,35 @@ def resume(job_id, owner_id):
             WHERE job_id=%s AND owner_id=%s AND state='FAILED' RETURNING *''', (job_id,owner_id)).fetchone()
 
 
+
+def queue_salvage(job_id, owner_id):
+    """Owner-approved local-only assembly for the known v3 seam review.
+
+    All previous provider predictions must already be COMPLETED. Nothing is
+    submitted, cleared, cloned or charged by this command.
+    """
+    prefix='wan_telegram_recreation_cleangraphics_v3_20261115_segment_%'
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs AS j
+            SET state='QUEUED',stage='SALVAGE',attempt=0,
+                next_attempt_at=now(),lease_until=NULL,lease_owner=NULL,
+                last_error=NULL,updated_at=now()
+            WHERE j.job_id=%s AND j.owner_id=%s
+              AND j.state='NEEDS_REVIEW' AND j.stage='AUTO_GENERATE'
+              AND j.last_error LIKE 'Adjacent generated poses/scenes differ too much.%%'
+              AND j.original_key IS NOT NULL
+              AND j.checkpoint#>>'{local_preflight,source_key}'=j.original_key
+              AND j.segment_total > 0
+              AND j.segment_total=(
+                  SELECT count(*) FROM recreation_steps s
+                  WHERE s.job_id=j.job_id AND s.step_key LIKE %s
+                    AND s.state='COMPLETED')
+              AND NOT EXISTS (
+                  SELECT 1 FROM recreation_steps s
+                  WHERE s.job_id=j.job_id
+                    AND s.state IN ('SUBMITTING','SUBMITTED','POLLING','UNCERTAIN'))
+            RETURNING j.*""",(job_id,owner_id,prefix)).fetchone()
+
 def cancel(job_id, owner_id):
     with connect() as conn:
         return conn.execute('''UPDATE recreation_jobs SET state='CANCELLED',updated_at=now()
@@ -333,7 +362,7 @@ def claim_app(worker,seconds=240):
     with connect() as conn:
         return conn.execute("""WITH selected AS (
             SELECT job_id FROM recreation_jobs WHERE owner_id=ANY(%s::bigint[])
-            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT')
+            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE')
             AND state IN ('QUEUED','RUNNING','WAITING_PROVIDER')
             AND next_attempt_at<=now()
             AND (lease_until IS NULL OR lease_until<now())
