@@ -1,11 +1,13 @@
-# Recreation Studio v3.14 — Always-on owner app
+# Recreation Studio normal always-on mode
 
-Enable the isolated Telegram Recreation Studio so the authorized owner can start repeated full-video Nicole jobs directly in Telegram without changing Render environment variables for each job.
+Deploy staging only; do not modify Mg2121u/Nicole-Telegram-Agent or Nicole production Render services.
 
-Usage: /new -> upload MP4 -> optionally /identity, /scenery, /clothes, /instructions -> /generate -> /status. Saved owner-specific Nicole identity carries forward to new drafts, source media never carries forward. No daily or job-count quotas; the old single-job 60s staging cap is lifted. Provider billing and Telegram/media technical limits still apply. Only an explicit /generate request queues paid work.
+Owner can upload a source MP4 directly to the isolated Recreation Studio Telegram DM. If the previous job is running or completed, a new job draft is created automatically, carrying forward only the owner's saved Nicole photo. A successful /identity upload overrides it. /generate explicitly authorizes a new paid Wan generation, without any Render configuration change or per-run approval ID. /status tracks progress.
 
-Staging Render worker mode: app_always_on; ENABLE_PAID_GENERATION true; ENABLE_PAID_VOICE_GENERATION false. Web service: ENABLE_PAID_GENERATION true; existing private Telegram webhook and whitelist unchanged. Bot and WaveSpeed credentials remain secrets in Render. Old full-video one-shot flags stay false and approval ID unset.
+Always-on worker `WORKER_MODE=app_always_on`, `ENABLE_PAID_GENERATION=true`, voice generation disabled; isolated web webhook `ENABLE_PAID_GENERATION=true`. No startup charges: only owner-initiated /generate queues generation.
 
-Every new job's first 480p Wan 3.0 request uses Nicole reference image and first source-motion slice. Every subsequent request uses Nicole image + actual final frame from preceding generated clip + the next source-motion slice. Durable per-job/per-segment provider IDs stop duplicate billing after restarts. Last-frame checkpoints persist. Local 250ms optical-flow seam smoothing and original-source soundtrack restoration are applied. The /preflight command remains available in always-on worker.
+Continuity: image 1 Nicole; image 2 previous GENERATED segment final frame; video 1 source-motion slice. Motion-aware 250ms seam interpolation, original-audio merge, final Telegram delivery. Durable provider step IDs prevent automatic repeated charges. Only owner allowlisted IDs are permitted.
 
-No automatic public access; only approved Telegram user IDs may submit chargeable jobs. A previously unverified character path or voiceover is not silently activated. See APP_ALWAYS_ON.md bundled in the source archive. Local owner/security tests were run with provider calls mocked; full automated suite runs during Render Docker build.
+Default estimated per-video spending guard: `APP_MAX_ESTIMATED_USD=10.00`. It is not a daily usage quota; higher estimates pause before any paid provider submission. For long sources the estimate is based on actual source duration, model rates, and segment count. No other automatic daily/monthly limits.
+
+Safety: completed source media and old outputs remain untouched. Production Nicole Telegram, paid calls, Stars, and Supabase memory are untouched. Built-in unit and Render Docker tests verify queue lifecycle; a real paid generation needs the owner's own MP4 and /generate.
