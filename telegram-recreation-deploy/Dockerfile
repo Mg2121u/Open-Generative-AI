@@ -6,6 +6,7 @@ COPY telegram-recreation-deploy/source.tar.xz /tmp/recreation-source.tar.xz
 RUN tar -xJf /tmp/recreation-source.tar.xz -C /app --strip-components=1 && rm /tmp/recreation-source.tar.xz
 COPY telegram-recreation-deploy/fix_unlimited_spending.py /tmp/fix_unlimited_spending.py
 RUN python /tmp/fix_unlimited_spending.py && rm /tmp/fix_unlimited_spending.py
+RUN printf '\\n=== DIAGNOSTIC SOURCE FILES ===\\n' && find /app/recreation -maxdepth 1 -name '*.py' -printf '%f\\n' && printf '\\n=== TELEGRAM COMMAND AND REVIEW PATH ===\\n' && grep -R -n -C 10 -E '(\/generate|NEEDS_REVIEW|requeue|resume|def generate|def .*command|def .*owner)' /app/recreation/telegram.py /app/recreation/db.py /app/recreation/main.py /app/recreation/worker.py 2>/dev/null | head -n 350
 RUN pip install --no-cache-dir -r requirements.txt
 RUN PYTHONPATH=/app pytest -q /app/tests
 RUN python -c "from recreation.main import app; assert app.title == 'Telegram Recreation Studio'"
