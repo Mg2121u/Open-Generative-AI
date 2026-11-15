@@ -109,3 +109,19 @@ block = block.replace(
 )
 path.write_text(source[:start] + block + source[end:])
 print("RECREATION_RECOVERY generate_command_can_resume_config_review=True", flush=True)
+
+# In the app queue, segment progress must not count completed steps from the
+# previous v2 test namespace. Count only current RUN_KEY completed predictions.
+path = ROOT / "app_queue.py"
+source = path.read_text()
+needle = "progress=db.count_auto_segments(job['job_id'])"
+replacement = (
+    "progress=db.count_auto_segments(job['job_id'])\n"
+    "        if __import__('os').getenv('RECREATION_RUN_KEY'):\n"
+    "            active_steps=[db.get_step(job['job_id'],full_video.step_key(i))\n"
+    "                          for i in range(int(job.get('segment_total') or 0))]\n"
+    "            progress=sum(1 for s in active_steps if s and s.get('state')=='COMPLETED')"
+)
+assert source.count(needle) == 1, "Unexpected application progress checkpoint"
+path.write_text(source.replace(needle, replacement, 1))
+print("RECREATION_PROGRESS_FIX current_run_only=True", flush=True)
