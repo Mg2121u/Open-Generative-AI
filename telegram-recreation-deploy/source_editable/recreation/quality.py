@@ -34,10 +34,11 @@ def _clean(text, limit=260):
 
 
 def quality_plan(duration, *, max_clips=2400):
-    """Short motion windows distributed evenly, no tiny final remainder.
+    """Use bounded 8.5-second windows, rather than 13 chained 4s windows.
 
-    Keep 2.0s <= window <= 3.99s; do not round one frame into a jump cut.
-    Billing still uses the provider-required integer output seconds.
+    This model supports up to 15s of video reference and requires total
+    input+output duration <=30s. At 8.5s both sides stay well within limits.
+    Each independent window resets to the canonical character reference.
     """
     try:
         duration = round(float(duration), 3)
@@ -45,17 +46,19 @@ def quality_plan(duration, *, max_clips=2400):
         raise ValueError('Invalid source duration') from None
     if not math.isfinite(duration) or not 2 <= duration <= 7200:
         raise ValueError('Unsupported source duration')
-    clips = min(max_clips, max(1, math.ceil(duration / 3.99)))
+    clips = min(max_clips, max(1, math.ceil(duration / 8.5)))
     if not clips:
         raise ValueError('Invalid quality plan')
     sizes = [round(duration / clips, 3)] * clips
     sizes[-1] = round(duration - sum(sizes[:-1]), 3)
-    if any(not 2 <= size <= 3.99 for size in sizes):
+    if any(not 2 <= size <= 8.5 for size in sizes):
         raise ValueError('Cannot split motion into safe short windows')
     result = []
     at = 0.0
     for i, size in enumerate(sizes):
         output_seconds = max(2, math.ceil(size - 1e-7))
+        if size + output_seconds > 30 or size > 15:
+            raise ValueError('Reference duration exceeds Wan input/output limit')
         result.append({'index': i, 'start': round(at, 3), 'duration': size,
                        'output_seconds': output_seconds, 'reused': False,
                        'estimated_usd': round((math.ceil(size) + output_seconds) * .05, 2)})
@@ -63,6 +66,15 @@ def quality_plan(duration, *, max_clips=2400):
     if abs(at - duration) > .006:
         raise ValueError('Duration was not conserved')
     return result
+
+
+def reset_identity_each_segment(job):
+    """Do not recursively treat imperfect Wan output as the next reference.
+
+    The first-priority image is the same saved Nicole identity on every paid
+    segment. Previous outputs may be used for local continuity metrics only.
+    """
+    return enabled(job) and os.getenv('RECREATION_IDENTITY_ANCHOR', 'canonical').lower() == 'canonical'
 
 
 def fixed_seed(job):
@@ -110,16 +122,19 @@ def outfit_instruction(job):
 
 def build_prompt(job, *, chained=False):
     motion = (
-        'VIDEO 1 IS FOR MOTION AND CAMERA TIMING ONLY. Reproduce the source '
+        'VIDEO 1 IS THE MOTION AND CAMERA TIMING AUTHORITY. Reproduce the source '
         'choreography pose by pose, including hand movements, steps, limb trajectories, '
         'head direction, rhythm, framing and camera path. Do not borrow the Video 1 '
-        'performer\'s identity, clothes, or scenery except when a rule below explicitly says so. '
+        'performer\'s identity. Use Video 1 clothing or scenery ONLY when ' 
+        'the owner specifically requests keeping them, as stated below. '
     )
     identity = (
         'IMAGE 1 IS THE ONLY IDENTITY AUTHORITY: Nicole is the same single adult woman '
         'throughout, with identical facial geometry, eyes, nose, jaw, hairline, hair color, '
         'skin tone, body proportions and stature. Do not blend, average, morph, or swap '
         'Nicole with the Video 1 performer or with Image 2. '
+        'Every segment independently resets to the original Nicole reference ' 
+        'photo, never to an imperfect AI-generated version of Nicole. ' 
         'Every frame must look like one continuous real video of the same person. '
     )
     continuity = (
@@ -129,8 +144,9 @@ def build_prompt(job, *, chained=False):
         'controls the location. Continue the physical dance without resetting, '
         'teleporting or morphing between poses. '
     ) if chained else (
-        'Begin this clip using Nicole from Image 1, already in the action and '
-        'camera position shown by the beginning of Video 1. '
+        'NO previous generated frame is supplied. Start at the opening pose ' 
+        'of the current Video 1 motion interval, using original Nicole in Image 1. ' 
+        'Maintain her exact proportions and wardrobe across the entire clip. '
     )
     stability = (
         'STRICT TEMPORAL ANATOMY: Keep exactly two arms, two legs, two hands and '
