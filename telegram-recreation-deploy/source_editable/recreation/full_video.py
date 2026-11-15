@@ -17,7 +17,7 @@ from urllib.parse import urlsplit, unquote
 
 from botocore.exceptions import ClientError
 
-from . import db, ffmpeg, provider, storage, wan_canary, telegram
+from . import db, ffmpeg, provider, storage, wan_canary, telegram, quality
 
 LOGGER = logging.getLogger('full-video')
 RUN_KEY = 'nicole_full_480p_continuity_v2_20261115'
@@ -114,7 +114,9 @@ def report(job):
         raise ValueError('Nicole private identity reference is required')
     if not (240 <= source['width'] <= 4096 and 240 <= source['height'] <= 4096):
         raise ValueError('Unsupported source dimensions')
-    segments=plan(source['duration'],reuse_first=_reusable_canary(job))
+    quality_mode=quality.enabled(job)
+    segments=(quality.quality_plan(source['duration']) if quality_mode
+              else plan(source['duration'],reuse_first=_reusable_canary(job)))
     return {'source_duration':source['duration'],'segments':segments,'remaining_estimate_usd':estimate(segments),
             'generated_sections':len([s for s in segments if not s['reused']]),
             'reused_first_canary':bool(segments[0]['reused']), 'audio':'original_source', 'run_key':RUN_KEY,
@@ -287,6 +289,22 @@ def _merge_original_sound(job, segments, keys, *, destination_override=None, mot
                 next_first=root/f'boundary_{seg["index"]:03}_first.jpg'
                 adjusted=root/f'continuity_{seg["index"]:03}.mp4'
                 ffmpeg.extract_last_frame(clips[-1],prev_end)
+                if (os.getenv('RECREATION_QUALITY_MODE','').lower()=='identity_lock'
+                        and os.getenv('RECREATION_SEAM_MODE','').lower()=='cut_no_warp'):
+                    # Existing 250ms dense optical flow can deform Nicole's
+                    # face, hands, skirt and limbs. Do not synthesize anatomy
+                    # to conceal a bad model boundary. Compare RAW frames.
+                    ffmpeg.extract_first_frame(dest,next_first)
+                    raw_error=ffmpeg.frame_difference(prev_end,next_first)
+                    LOGGER.info('IDENTITY_LOCK seam_index=%d raw_frame_difference=%.4f no_warp=true',
+                                seg['index'],raw_error)
+                    if raw_error > .28:
+                        raise provider.NeedsReview(
+                            'Adjacent generated poses/scenes differ too much. '
+                            'Identity-lock QA blocked morphing assembly; '
+                            'original segments saved for review.')
+                    clips.append(dest)
+                    continue
                 if motion_aware:
                     ffmpeg.motion_interpolate_start(clips[-1],dest,adjusted,seconds=0.25)
                 else:
@@ -394,6 +412,11 @@ def _run_segments(job,info,*,guard):
             else:
                 payload=wan_canary.payload_for(reference,source_media['width'],source_media['height'],[image])
                 payload['prompt']+=' Opening segment: establish Nicole from Image 1; follow Video 1 motion only.'
+            if quality.enabled(job):
+                # Explicitly honor the owner's scenery and outfit instead of
+                # the legacy prompt, which unintentionally kept Video 1 scenery.
+                payload['prompt']=quality.build_prompt(job,chained=bool(last_key))
+                payload['seed']=quality.fixed_seed(job)
             payload['duration']=seg['output_seconds']
             LOGGER.info('FULL_VIDEO submitting_segment=%d estimate_usd=%.2f',idx,seg['estimated_usd'])
             step=provider.submit_once(job_id,step_key(idx),wan_canary.MODEL,payload)
