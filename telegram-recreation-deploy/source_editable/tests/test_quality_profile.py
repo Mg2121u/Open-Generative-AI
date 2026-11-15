@@ -35,6 +35,7 @@ def test_prompts_use_owner_scene_outfit_and_image_authorities():
     assert 'wardrobe authority' in p
     assert 'do not' in p.lower()
     assert 'No flickering facial features' in p
+    assert 'social-media handles' in p and 'NO visible writing' in p
     assert 'Do not borrow the Video 1' in p
 
 
@@ -48,13 +49,13 @@ def test_source_scene_and_source_outfit_are_opt_in():
 
 def test_qa_plan_uses_short_equal_motion_windows():
     segs = quality.quality_plan(18.2)
-    assert len(segs) == 7
-    assert all(2 <= s['duration'] < 3 for s in segs)
-    assert all(s['duration'] == 2.6 for s in segs)
-    assert segs[-1]['start'] == pytest.approx(15.6)
+    assert len(segs) == 5
+    assert all(3 <= s['duration'] < 4 for s in segs)
+    assert all(s['duration'] == 3.64 for s in segs)
+    assert segs[-1]['start'] == pytest.approx(14.56)
     assert sum(s['duration'] for s in segs) == pytest.approx(18.2)
     assert all(s['reused'] is False for s in segs)
-    assert len(quality.quality_plan(9.366667)) == 4
+    assert len(quality.quality_plan(9.366667)) == 3
 
 
 def test_same_job_deterministic_seed_uses_valid_wan_range():
@@ -76,7 +77,7 @@ def test_report_uses_quality_windows_and_never_reuses_old_paid_canary(monkeypatc
     monkeypatch.setenv('RECREATION_QUALITY_MODE', 'identity_lock')
     monkeypatch.setattr(full_video, '_reusable_canary', lambda _: pytest.fail('old canary reused'))
     result = full_video.report(job())
-    assert len(result['segments']) == 7
+    assert len(result['segments']) == 5
     assert result['reused_first_canary'] is False
     assert result['source_duration'] == 18.2
 
