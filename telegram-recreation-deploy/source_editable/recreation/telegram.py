@@ -46,6 +46,7 @@ def show(job):
     return (f'Job {str(job["job_id"])[:8]} · {job["state"]}\n'
         f'Stage: {job["stage"]}\n'
         f'Character: {job["character"]} | Model: {job["model"]} | 480p\n'
+        f'Quality: {"identity-lock / no warping" if os.getenv("RECREATION_QUALITY_MODE","").lower()=="identity_lock" else "standard"}\n'
         f'Scenery: {job["scenery"]}\nClothes: {job["outfit"]}\nVoice: ElevenLabs v4 · {job.get("voiceover_voice", "AUTO")} · {"on" if job.get("voiceover_text") else "off (original audio)"}\n'
         f'Source archive: {"saved" if job.get("original_key") else "not yet stored"}\n'
         f'Nicole identity: {((job.get("checkpoint") or {}).get("identity") or {}).get("status", "missing")}\n'
@@ -69,11 +70,21 @@ def process_message(message):
     if not ALLOWED_USERS or int(owner) not in ALLOWED_USERS:
         say(chat,'This app is private. Send /id to retrieve your ID for access.'); return
     if cmd in ('/start','/help'):
-        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
+        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
         return
     if cmd=='/new':
         job=db.create_draft(chat,owner)
         say(chat,f'New job {job[:8]}. Your saved Nicole reference is reused if available. Send an MP4, optionally set /scenery /clothes /instructions, then /generate.');return
+    if cmd=='/redo':
+        result=db.create_redo_from_latest(chat,owner)
+        if not result:
+            say(chat,'No completed Nicole job with a saved original video and identity photo is available to redo.');return
+        say(chat, f'Quality redo draft {result["job_id"][:8]} created from '
+                  f'{result["from_job"][:8]}. Original MP4, Nicole reference, '
+                  'scenery and outfit are reused. The old result stays untouched. '
+                  'No new AI charges yet. Use /fullplan to see the updated plan, '
+                  'or /generate to authorize the new paid Wan 480p run.')
+        return
     job=db.latest_job(owner)
     # Sending a video is the ordinary way to begin another recreation. If the
     # previous job has already started/completed, create a fresh draft and carry
@@ -177,7 +188,7 @@ def process_message(message):
                 f'New Wan generations: {rpt["generated_sections"]}\n'
                 f'Estimated additional 480p cost: ${rpt["remaining_estimate_usd"]:.2f}\n'
                 f'Final audio: original source soundtrack\n'
-                'Continuity: previous generated last frame + local seam blending\n'
+                f'Continuity: {"original-frame chaining, no optical-flow warping" if os.getenv("RECREATION_QUALITY_MODE","").lower()=="identity_lock" else "previous generated last frame + local seam blending"}\n'
                 'Charges occur only after /generate; actual provider billing may differ.')
         except (ValueError,KeyError,TypeError) as exc:
             say(chat, 'Full-video plan unavailable: '+str(exc)[:350])
