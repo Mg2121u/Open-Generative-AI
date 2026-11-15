@@ -1,0 +1,61 @@
+services:
+  - type: worker
+    name: telegram-recreation-preflight-worker-stage
+    runtime: docker
+    region: frankfurt
+    plan: 0.5c-512mb
+    numInstances: 1
+    autoDeployTrigger: off
+    maxShutdownDelaySeconds: 120
+    dockerfilePath: ./telegram-recreation-deploy/Dockerfile
+    dockerContext: .
+    branch: feature/telegram-video-recreation-app-20261114
+    envVars:
+      - key: APP_ROLE
+        value: worker
+      - key: WORKER_MODE
+        value: preflight_only
+      - key: ENABLE_PAID_GENERATION
+        value: 'false'
+      - key: ENABLE_PAID_VOICE_GENERATION
+        value: 'false'
+      - key: DATABASE_URL
+        fromService:
+          name: telegram-recreation-studio-stage
+          type: web
+          envVarKey: DATABASE_URL
+      - key: BOT_TOKEN
+        fromService:
+          name: telegram-recreation-studio-stage
+          type: web
+          envVarKey: BOT_TOKEN
+      - key: ALLOWED_TELEGRAM_USER_IDS
+        fromService:
+          name: telegram-recreation-studio-stage
+          type: web
+          envVarKey: ALLOWED_TELEGRAM_USER_IDS
+      - key: S3_BUCKET
+        fromService:
+          name: telegram-recreation-studio-stage
+          type: web
+          envVarKey: S3_BUCKET
+      - key: S3_ENDPOINT_URL
+        fromService:
+          name: telegram-recreation-studio-stage
+          type: web
+          envVarKey: S3_ENDPOINT_URL
+      - key: S3_REGION
+        fromService:
+          name: telegram-recreation-studio-stage
+          type: web
+          envVarKey: S3_REGION
+      - key: S3_ACCESS_KEY_ID
+        fromService:
+          name: telegram-recreation-studio-stage
+          type: web
+          envVarKey: S3_ACCESS_KEY_ID
+      - key: S3_SECRET_ACCESS_KEY
+        fromService:
+          name: telegram-recreation-studio-stage
+          type: web
+          envVarKey: S3_SECRET_ACCESS_KEY
