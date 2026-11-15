@@ -80,14 +80,14 @@ def _mask(frame,center):
         fine=gray.astype(np.int16)-smooth.astype(np.int16)
         x1,x2=int(.065*w),int(.16*w)
         y1,y2=int(.525*h),int(.595*h)
-        region=(gray[y1:y2,x1:x2]>178)&(fine[y1:y2,x1:x2]>9)
+        region=(gray[y1:y2,x1:x2]>150)&(fine[y1:y2,x1:x2]>5)
         mask[y1:y2,x1:x2][region]=255
         x1,x2=int(.065*w),int(.375*w)
         y1,y2=int(.59*h),int(.634*h)
-        region=(gray[y1:y2,x1:x2]>172)&(fine[y1:y2,x1:x2]>8)
+        region=(gray[y1:y2,x1:x2]>145)&(fine[y1:y2,x1:x2]>4)
         mask[y1:y2,x1:x2][region]=255
         mask=cv2.dilate(mask,cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(3,3)),
-                        iterations=1)
+                        iterations=2)
     return mask
 
 
