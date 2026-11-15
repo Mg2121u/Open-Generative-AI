@@ -454,7 +454,7 @@ def _run_segments(job,info,*,guard):
                            (not reset and idx>0 and len(refs)>=2 and
                             expected in unquote(urlsplit(refs[1]).path)))
             if not (identity_ok and continuity_ok):
-                raise provider.NeedsReview('Submitted segment lacks verified canonical Nicole identity or expected continuity inputs')
+                raise provider.NeedsReview('Submitted segment lacks verified Nicole identity or expected chained-frame continuity inputs')
         if step['state'] in ('SUBMITTING','UNCERTAIN','FAILED'):
             raise provider.NeedsReview('Uncertain provider request; manual reconciliation required')
         if step['state']!='COMPLETED':
