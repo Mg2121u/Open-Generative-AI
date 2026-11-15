@@ -67,6 +67,16 @@ def process(job):
                 f'estimated additional WaveSpeed charge ${plan["remaining_estimate_usd"]:.2f} '
                 '(actual provider billing may vary). Original audio will be preserved. /status tracks progress.')
         return
+    if stage=='SALVAGE':
+        # Salvage is local remux only; NEVER invoke the Wan run_auto path.
+        outcome=full_video.salvage_existing_v3(job)
+        if outcome!='completed':
+            raise RuntimeError('Unexpected local-only salvage result')
+        done=_next(job,stage='DONE',state='COMPLETED',
+                   current_segment=job['segment_total'],
+                   event=('local_salvage','Recovered existing paid clips without provider generation'))
+        if done:LOG.info('LOCAL_SALVAGE completed=true job=%s provider_calls=0',job_id[:8])
+        return
     if stage=='AUTO_GENERATE':
         status=full_video.run_auto(job)
         progress=db.count_auto_segments(job['job_id'])
