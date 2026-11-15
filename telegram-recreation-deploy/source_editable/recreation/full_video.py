@@ -17,7 +17,7 @@ from urllib.parse import urlsplit, unquote
 
 from botocore.exceptions import ClientError
 
-from . import db, ffmpeg, provider, storage, wan_canary, telegram, quality
+from . import db, ffmpeg, provider, storage, wan_canary, telegram, quality, overlay_cleanup
 
 LOGGER = logging.getLogger('full-video')
 RUN_KEY = 'nicole_full_480p_continuity_v2_20261115'
@@ -264,6 +264,12 @@ def _prepare_reference(job, segment):
         details=ffmpeg.trim(src,clip,segment['start'],segment['duration'])
         if not (2<=details['duration']<=15) or not (240<=min(details['width'],details['height'])<=4096):
             raise RuntimeError('Input segment failed media validation')
+        if (quality.enabled(job) and
+                os.getenv('RECREATION_REFERENCE_SCRUB','on').lower() != 'off'):
+            cleaned=f/'motion_reference_clean.mp4'
+            if overlay_cleanup.clean_motion_reference(clip,cleaned):
+                clip=cleaned
+                LOGGER.info('REFERENCE_OVERLAY_CLEANED segment=%d clean=true',segment['index'])
         storage.upload_key(key,clip)
     return key
 
@@ -323,6 +329,12 @@ def _merge_original_sound(job, segments, keys, *, destination_override=None, mot
             else:
                 clips.append(dest)
         ffmpeg.concatenate(clips,joined)
+        if (os.getenv('RECREATION_QUALITY_MODE','').lower()=='identity_lock' and
+                os.getenv('RECREATION_REFERENCE_SCRUB','on').lower()!='off'):
+            cleaned_joined=root/'cleaned_join.mp4'
+            if overlay_cleanup.clean_motion_reference(joined,cleaned_joined):
+                joined=cleaned_joined
+                LOGGER.info('FINAL_OVERLAY_CLEANED clean=true original_audio_preserved=true')
         info=ffmpeg.restore_source_audio(joined,original,final)
         duration_expected=sum(s['duration'] for s in segments)
         if not info['has_audio'] or abs(info['duration']-duration_expected)>.20:
