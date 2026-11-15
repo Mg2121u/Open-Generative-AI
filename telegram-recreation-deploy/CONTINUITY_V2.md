@@ -1,0 +1,6 @@
+# Staging only: Nicole generated-frame continuity v2
+The previous completed 13.9s run used 5 independent Wan-generated/reused segments. This staging correction passes the last actual decoded frame of each prior GENERATED segment as Image 2 to the next Wan 3.0 reference-to-video call. Image 1 remains Nicole's portrait; Video 1 remains only the source-motion slice. All previous generated outputs and their WaveSpeed prediction IDs remain unchanged.
+
+At final 480p assembly, a local 200ms blend starts each new segment with the previous generated ending frame. Boundary first-frame mismatch is checked, while segment duration and original source audio remain aligned. This is best-effort model continuity; Wan reference-to-video does not support a strict first_frame parameter simultaneously with source-video references. An image-to-video model would be an alternative if exact first-frame-only control were preferred over motion referencing.
+
+New approval namespace: nicole_full_480p_continuity_v2_20261115. The earlier USD 1.50 full-video v1 approval is INSUFFICIENT for a paid continuity v2 run. No new WaveSpeed calls, paid generation or voice enabled. Staging tests: 104 passed locally with no paid calls; Render build runs its own tests. See bundled FULL_VIDEO_STAGING.md.
