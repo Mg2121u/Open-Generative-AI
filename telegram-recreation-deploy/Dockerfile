@@ -4,6 +4,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg nodejs c
 WORKDIR /app
 COPY telegram-recreation-deploy/source.tar.xz /tmp/recreation-source.tar.xz
 RUN tar -xJf /tmp/recreation-source.tar.xz -C /app --strip-components=1 && rm /tmp/recreation-source.tar.xz
+COPY telegram-recreation-deploy/fix_unlimited_spending.py /tmp/fix_unlimited_spending.py
+RUN python /tmp/fix_unlimited_spending.py && rm /tmp/fix_unlimited_spending.py
 RUN pip install --no-cache-dir -r requirements.txt
 RUN PYTHONPATH=/app pytest -q /app/tests
 RUN python -c "from recreation.main import app; assert app.title == 'Telegram Recreation Studio'"
