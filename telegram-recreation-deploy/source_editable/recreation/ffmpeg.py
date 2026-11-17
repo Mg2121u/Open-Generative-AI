@@ -60,6 +60,22 @@ def concatenate(inputs,output):
 
 
 
+def trim_video_stream_copy(source, output, duration):
+    """Remove small accumulated concat overrun without re-encoding a single frame.
+
+    H.264 B-frame reordering can retain a few frames beyond the requested
+    time; the caller validates the actual probed output rather than guessing.
+    No new video or audio is synthesized here.
+    """
+    if float(duration)<=0:
+        raise ValueError('Invalid final source duration')
+    run('ffmpeg','-hide_banner','-loglevel','error','-y',
+        '-i',str(source),'-t',f'{float(duration):.6f}',
+        '-map','0:v:0','-an','-c:v','copy',
+        '-movflags','+faststart',str(output),timeout=180)
+    return probe(output)
+
+
 def extract_last_frame(video, output):
     """Decode the actual final frame from a generated MP4, not a source frame.
 
