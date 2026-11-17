@@ -93,7 +93,7 @@ def loop():
                 try: telegram.say(job['chat_id'],'Job paused for safe review. Your existing segments and provider request IDs are preserved. Use /status for details.')
                 except Exception: logger.exception('Could not notify user')
             except Exception as exc:
-                logger.warning('Worker stage failed: stage=%s job=%s error_type=%s',job['stage'],str(job['job_id'])[:8],type(exc).__name__)
+                logger.exception('Worker stage failed: stage=%s job=%s error_type=%s',job['stage'],str(job['job_id'])[:8],type(exc).__name__)
                 attempts=int(job['attempt'])+1
                 retry=attempts<=5
                 delay=min(900,15*2**(attempts-1))
