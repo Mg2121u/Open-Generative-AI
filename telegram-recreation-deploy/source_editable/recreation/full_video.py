@@ -357,9 +357,23 @@ def _merge_original_sound(job, segments, keys, *, destination_override=None, mot
             except (RuntimeError,ValueError,TimeoutError) as exc:
                 LOGGER.warning('ASSEMBLY_PHASE job=%s stage=final_scrub_skip error_type=%s',
                                job_id[:8],type(exc).__name__)
+        duration_expected=sum(seg['duration'] for seg in segments)
+        prepared=ffmpeg.probe(joined)
+        overrun=prepared['duration']-duration_expected
+        if 0.075<overrun<=max(0.5,len(segments)*.06):
+            # Discrete per-clip 24fps output adds up to a few extra frames.
+            # Stream-copy the assembled video down to the source timeline.
+            # This avoids a third lossy video encode and keeps source audio synced.
+            LOGGER.info('ASSEMBLY_PHASE job=%s stage=duration_correction_start overrun=%.3f',job_id[:8],overrun)
+            corrected=root/'duration_corrected.mp4'
+            measured=ffmpeg.trim_video_stream_copy(joined,corrected,duration_expected)
+            LOGGER.info('ASSEMBLY_PHASE job=%s stage=duration_correction_complete actual=%.3f expected=%.3f',
+                        job_id[:8],measured['duration'],duration_expected)
+            if abs(measured['duration']-duration_expected)>.18:
+                raise RuntimeError('Source timeline correction could not reach safe frame tolerance')
+            joined=corrected
         LOGGER.info('ASSEMBLY_PHASE job=%s stage=restore_audio_start',job_id[:8])
         info=ffmpeg.restore_source_audio(joined,original,final)
-        duration_expected=sum(seg['duration'] for seg in segments)
         duration_diff=abs(info['duration']-duration_expected)
         LOGGER.info('ASSEMBLY_PHASE job=%s stage=restore_audio_complete actual=%.3f expected=%.3f difference=%.3f has_audio=%s',
                     job_id[:8],info['duration'],duration_expected,duration_diff,info['has_audio'])
