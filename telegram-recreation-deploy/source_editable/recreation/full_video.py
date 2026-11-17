@@ -332,18 +332,44 @@ def _merge_original_sound(job, segments, keys, *, destination_override=None, mot
                 clips.append(adjusted)
             else:
                 clips.append(dest)
+        LOGGER.info('ASSEMBLY_PHASE job=%s stage=concat_start clips=%d',job_id[:8],len(clips))
         ffmpeg.concatenate(clips,joined)
-        if (os.getenv('RECREATION_QUALITY_MODE','').lower()=='identity_lock' and
-                os.getenv('RECREATION_REFERENCE_SCRUB','on').lower()!='off'):
+        merged=ffmpeg.probe(joined)
+        LOGGER.info('ASSEMBLY_PHASE job=%s stage=concat_complete duration=%.3f audio=%s',
+                    job_id[:8],merged['duration'],merged['has_audio'])
+        # Motion references are cleaned before paid generation; final cleanup
+        # is optional. A separate FFmpeg/inpainting pass can be costly and
+        # must never make an otherwise deliverable video fail or lose paid clips.
+        final_scrub=(os.getenv('RECREATION_FINAL_SCRUB','off').lower()=='on'
+                     and os.getenv('RECREATION_QUALITY_MODE','').lower()=='identity_lock')
+        if final_scrub:
+            LOGGER.info('ASSEMBLY_PHASE job=%s stage=final_scrub_start',job_id[:8])
             cleaned_joined=root/'cleaned_join.mp4'
-            if overlay_cleanup.clean_motion_reference(joined,cleaned_joined):
-                joined=cleaned_joined
-                LOGGER.info('FINAL_OVERLAY_CLEANED clean=true original_audio_preserved=true')
+            try:
+                if overlay_cleanup.clean_motion_reference(joined,cleaned_joined):
+                    candidate=ffmpeg.probe(cleaned_joined)
+                    if abs(candidate['duration']-merged['duration'])<.20:
+                        joined=cleaned_joined
+                        LOGGER.info('ASSEMBLY_PHASE job=%s stage=final_scrub_applied',
+                                    job_id[:8])
+                    else:
+                        LOGGER.warning('ASSEMBLY_PHASE job=%s stage=final_scrub_skip reason=duration_mismatch',job_id[:8])
+            except (RuntimeError,ValueError,TimeoutError) as exc:
+                LOGGER.warning('ASSEMBLY_PHASE job=%s stage=final_scrub_skip error_type=%s',
+                               job_id[:8],type(exc).__name__)
+        LOGGER.info('ASSEMBLY_PHASE job=%s stage=restore_audio_start',job_id[:8])
         info=ffmpeg.restore_source_audio(joined,original,final)
-        duration_expected=sum(s['duration'] for s in segments)
-        if not info['has_audio'] or abs(info['duration']-duration_expected)>.20:
-            raise RuntimeError('Final original-audio merge failed duration validation')
+        duration_expected=sum(seg['duration'] for seg in segments)
+        duration_diff=abs(info['duration']-duration_expected)
+        LOGGER.info('ASSEMBLY_PHASE job=%s stage=restore_audio_complete actual=%.3f expected=%.3f difference=%.3f has_audio=%s',
+                    job_id[:8],info['duration'],duration_expected,duration_diff,info['has_audio'])
+        if not info['has_audio'] or duration_diff>.20:
+            raise RuntimeError(
+                'Final original-audio merge failed duration validation: '
+                f'expected={duration_expected:.3f} actual={info["duration"]:.3f}')
+        LOGGER.info('ASSEMBLY_PHASE job=%s stage=upload_start',job_id[:8])
         storage.upload_key(destination,final)
+        LOGGER.info('ASSEMBLY_PHASE job=%s stage=upload_complete',job_id[:8])
     return destination
 
 
