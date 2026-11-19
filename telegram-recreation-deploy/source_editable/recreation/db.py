@@ -253,6 +253,58 @@ def resume(job_id, owner_id):
 
 
 
+
+def qa_review_job(owner_id, job_prefix):
+    """Only this owner's explicit short job ID, and only a saved QA mismatch."""
+    import re
+    if not re.fullmatch(r'[0-9a-f]{8}',str(job_prefix).lower()):
+        raise ValueError('Use an eight-character job ID, for example 59bc3ef4')
+    with connect() as conn:
+        rows=conn.execute("""SELECT * FROM recreation_jobs
+            WHERE owner_id=%s AND left(job_id::text,8)=%s
+              AND state='NEEDS_REVIEW' AND stage='AUTO_GENERATE'
+              AND character='NICOLE' AND segment_total=1
+              AND last_error LIKE 'Nicole facial identity QA mismatch:%%'
+            LIMIT 2""",(owner_id,job_prefix.lower())).fetchall()
+    if len(rows)>1:
+        raise ValueError('Job ID prefix is not unique')
+    return rows[0] if rows else None
+
+
+def approve_qa_review(job_id, owner_id, *, expected_step):
+    """Atomic explicit owner authorization to DELIVER ONE ALREADY PAID clip.
+
+    No step is reset, no new provider prediction is reserved. All other QA
+    failures, pending calls and incomplete jobs stay blocked.
+    """
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs AS j
+            SET state='QUEUED',stage='QA_OWNER_APPROVED',attempt=0,
+                next_attempt_at=now(),lease_until=NULL,lease_owner=NULL,
+                checkpoint=jsonb_set(COALESCE(j.checkpoint,'{}'::jsonb),
+                    '{quality_override}',
+                    jsonb_build_object('type','owner_accepted_facial_mismatch',
+                        'owner_id',%s::bigint,
+                        'approved_at',to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                        'original_failure',j.last_error,
+                        'source_step',%s::text),
+                    true),
+                updated_at=now()
+            WHERE j.job_id=%s AND j.owner_id=%s AND j.state='NEEDS_REVIEW'
+              AND j.stage='AUTO_GENERATE' AND j.character='NICOLE'
+              AND j.segment_total=1
+              AND j.last_error LIKE 'Nicole facial identity QA mismatch:%%'
+              AND j.original_key IS NOT NULL
+              AND j.checkpoint#>>'{identity,status}'='ready'
+              AND j.checkpoint#>>'{local_preflight,source_key}'=j.original_key
+              AND EXISTS (SELECT 1 FROM recreation_steps s
+                 WHERE s.job_id=j.job_id AND s.step_key=%s AND s.state='COMPLETED')
+              AND NOT EXISTS (SELECT 1 FROM recreation_steps s
+                 WHERE s.job_id=j.job_id AND s.state IN
+                 ('SUBMITTING','SUBMITTED','POLLING','UNCERTAIN'))
+            RETURNING j.*""",
+            (owner_id,expected_step,job_id,owner_id,expected_step)).fetchone()
+
 def queue_salvage(job_id, owner_id):
     """Owner-approved local-only assembly for the known v3 seam review.
 
@@ -455,7 +507,7 @@ def claim_app(worker,seconds=240):
     with connect() as conn:
         return conn.execute("""WITH selected AS (
             SELECT job_id FROM recreation_jobs WHERE owner_id=ANY(%s::bigint[])
-            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE','SEGMENT_REDO')
+            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE','SEGMENT_REDO','QA_OWNER_APPROVED')
             AND state IN ('QUEUED','RUNNING','WAITING_PROVIDER')
             AND next_attempt_at<=now()
             AND (lease_until IS NULL OR lease_until<now())
