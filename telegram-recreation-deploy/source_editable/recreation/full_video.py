@@ -17,7 +17,7 @@ from urllib.parse import urlsplit, unquote
 
 from botocore.exceptions import ClientError
 
-from . import db, ffmpeg, provider, storage, wan_canary, telegram, quality, overlay_cleanup
+from . import db, ffmpeg, provider, storage, wan_canary, telegram, quality, overlay_cleanup, identity_qa
 
 LOGGER = logging.getLogger('full-video')
 RUN_KEY = 'nicole_full_480p_continuity_v2_20261115'
@@ -443,6 +443,8 @@ def _run_segments(job,info,*,guard):
             continue
         key=segment_key(job_id,idx)
         if _stored(key):
+            if quality.reset_identity_each_segment(job):
+                identity_qa.check_archived(job,key)
             keys.append(key);continue
         step=db.get_step(job_id,step_key(idx))
         if step is None:
@@ -472,6 +474,11 @@ def _run_segments(job,info,*,guard):
                 payload=wan_canary.payload_for(reference,source_media['width'],source_media['height'],[image])
                 payload['prompt']+=' Opening segment: establish Nicole from Image 1; follow Video 1 motion only.'
             if quality.enabled(job):
+                # Give Wan TWO views of the ORIGINAL Nicole, never a previously
+                # generated face. Prepare before the paid provider reservation.
+                if not last_key and os.getenv('RECREATION_FACE_QA_MODE','on').lower()!='off':
+                    face_anchor=identity_qa.prepare_anchor(job)
+                    payload['reference_images'].append(storage.presign(face_anchor,3600))
                 # Explicitly honor the owner's scenery and outfit instead of
                 # the legacy prompt, which unintentionally kept Video 1 scenery.
                 payload['prompt']=quality.build_prompt(job,chained=bool(last_key))
@@ -490,7 +497,7 @@ def _run_segments(job,info,*,guard):
             current_identity=(job.get('checkpoint') or {}).get('identity',{}).get('nicole_image_key')
             identity_ok=bool(refs and current_identity and current_identity in unquote(urlsplit(refs[0]).path))
             reset=quality.reset_identity_each_segment(job)
-            continuity_ok=((len(refs)==1 and (idx==0 or reset)) or
+            continuity_ok=((len(refs) in (1,2) and (idx==0 or reset)) or
                            (not reset and idx>0 and len(refs)>=2 and
                             expected in unquote(urlsplit(refs[1]).path)))
             if not (identity_ok and continuity_ok):
@@ -503,8 +510,11 @@ def _run_segments(job,info,*,guard):
                 LOGGER.info('FULL_VIDEO waiting_for_segment=%d prediction_saved=true',idx)
                 return 'processing'
             step=db.get_step(job_id,step_key(idx))
-        keys.append(_archive_completed_provider(job_id,idx,step))
-        LOGGER.info('FULL_VIDEO saved_segment=%d',idx)
+        saved_key=_archive_completed_provider(job_id,idx,step)
+        if quality.reset_identity_each_segment(job):
+            identity_qa.check_archived(job,saved_key)
+        keys.append(saved_key)
+        LOGGER.info('FULL_VIDEO saved_segment=%d face_identity_check=true',idx)
     final=_merge_original_sound(job,segments,keys,motion_aware=(guard is _guard_auto))
     LOGGER.info('FULL_VIDEO complete=true original_audio=true segments=%d archive_saved=true',len(keys))
     _deliver_once(job,final)
