@@ -6,8 +6,8 @@ This is a prototype at /creator-studio inside the existing Next.js application. 
 - Browser-session-only gallery; independent Aria and Nicole selection; private access token in component memory only.
 - fal.ai submit + async status/result polling for FLUX.2 Dev, FLUX.2 Klein 9B and Wan 3.0 image-to-video. Uses current published model schemas.
 - Model safeguards remain **enabled**. fal explicitly prohibits sexually explicit content and bypassing protective controls. This app does not disable them.
-- Separate HTTPS-only GPU adapter. Its contract is below. GPU provider, legal approval, and model deployment are NOT included.
-- No paid requests are issued merely by deploying. Requests cost money only when the owner explicitly clicks Generate.
+- Separate HTTPS-only GPU adapter. Its contract is below. Salad worker source and a manual GHCR build workflow are now included in gpu-worker/. GPU provider connection and real inference deployment have NOT been completed.
+- No paid inference requests are issued merely by deploying the Vercel UI. Salad GPU container instances bill while running even without requests; stop the container group when idle.
 
 ## Vercel deployment
 Because this is a folder in a public GitHub repository, review deployment permissions and protect the preview URL. Do not put character reference photos or API keys in Git.

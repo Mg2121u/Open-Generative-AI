@@ -5,7 +5,7 @@ This is a draft-branch **image-only** pilot, not a running cloud deployment. The
 ## Overview
 - FastAPI on port 8000, single replica / one image at a time.
 - POST /jobs and GET /jobs/:id require Authorization: Bearer WORKER_API_TOKEN; GET /healthz and GET /readyz are health probes.
-- SDXL Base 1.0 text-to-image only, RTX 4090 24GB or better for initial tests.
+- FLUX.2 Klein 4B text-to-image only (Apache-2.0 model weights; BFL Usage Policy applies), RTX 4090 24GB or better for initial tests.
 - Private S3-compatible object storage persists each job and PNG. Results are presigned read URLs expiring after 15 minutes.
 - No character identity LoRA, reference image conditioning, or video yet. Characters are labels, not face-locked identities.
 - Costs accrue while Salad container instances run; **stop the group after testing**. Direct HTTPS does NOT automatically wake a stopped instance.
@@ -54,5 +54,6 @@ For now choose Independent GPU and **Image Studio** in the app. The worker rejec
 - SDXL inference and Salad image deployment have not been tested yet.
 - Worker running on interruptible community GPU may lose active image generations; expired jobs surface ERROR after 20 minutes.
 - Build image is large and may have substantial first-start latency; avoid promising instant cold boot.
+- The FLUX.2 Klein 4B model has explicit restrictions on unlawful content and non-consensual intimate imagery; it does not guarantee any particular adult output.
 - The Vercel page route itself needs additional access protection before using private reference photos (API token does not hide the HTML page).
 - This pilot uses one process only. To scale to zero or multiple replicas properly, replace direct HTTP with durable Salad Queue/worker/controller flow.

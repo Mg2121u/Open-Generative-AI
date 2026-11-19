@@ -16,7 +16,9 @@ export async function POST(request) {
       return NextResponse.json({ error: "Invalid character, mode or prompt." }, { status: 400 });
     }
     if (!["fal", "gpu"].includes(provider)) return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
-    if (mode === "image" && !IMAGE_MODELS.has(model)) return NextResponse.json({ error: "Unsupported image model." }, { status: 400 });
+    if (mode === "image" && provider === "fal" && !IMAGE_MODELS.has(model)) return NextResponse.json({ error: "Unsupported fal image model." }, { status: 400 });
+    if (mode === "image" && provider === "gpu" && model !== "selfhost/flux2-klein-4b") return NextResponse.json({ error: "Unsupported GPU image model." }, { status: 400 });
+    if (mode === "video" && provider === "gpu") return NextResponse.json({ error: "GPU video generation is not enabled in pilot." }, { status: 422 });
     if (mode === "video" && model !== VIDEO_MODEL) return NextResponse.json({ error: "Unsupported video model." }, { status: 400 });
     if (mode === "video" && !validExternalImage(referenceUrl)) return NextResponse.json({ error: "An HTTPS start-frame URL is required." }, { status: 400 });
     if (referenceUrl && !validExternalImage(referenceUrl)) return NextResponse.json({ error: "Reference image URL must be a public HTTPS URL without credentials." }, { status: 400 });

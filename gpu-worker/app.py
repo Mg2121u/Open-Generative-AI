@@ -83,14 +83,12 @@ def init():
             model = "mock"
         else:
             import torch
-            from diffusers import StableDiffusionXLPipeline
+            from diffusers import Flux2KleinPipeline
             if not torch.cuda.is_available():
                 raise RuntimeError("CUDA GPU unavailable")
-            model = StableDiffusionXLPipeline.from_pretrained(
-                "stabilityai/stable-diffusion-xl-base-1.0",
-                torch_dtype=torch.float16, use_safetensors=True, variant="fp16"
+            model = Flux2KleinPipeline.from_pretrained(
+                "black-forest-labs/FLUX.2-klein-4B", torch_dtype=torch.bfloat16
             ).to("cuda")
-            model.enable_vae_slicing()
         ready.set()
         log.info("Model and private storage ready")
     except Exception:
@@ -127,7 +125,7 @@ def render(job_id, payload):
             import torch
             image = model(
                 prompt=payload.prompt, width=width, height=height,
-                num_inference_steps=24, guidance_scale=6.0
+                num_inference_steps=4, guidance_scale=1.0
             ).images[0]
         stream = io.BytesIO()
         image.save(stream, format="PNG")
