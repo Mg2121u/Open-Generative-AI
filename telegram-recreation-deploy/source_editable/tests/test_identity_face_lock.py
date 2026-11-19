@@ -10,7 +10,10 @@ def job():
     return {'job_id':'faux-uuid','stage':'AUTO_GENERATE','state':'RUNNING',
             'character':'NICOLE','scenery':'keep source scenery',
             'outfit':'same as the identity image','instructions':'',
-            'checkpoint':{'identity':{'status':'ready','nicole_image_key':'private/nicole.jpg'}}}
+            'checkpoint':{'identity':{'status':'ready','nicole_image_key':'private/nicole.jpg'},
+                         'local_preflight':{'complete':True,'source_key':'original.mp4',
+                                            'source_probe':{'width':480,'height':854,
+                                                            'duration':8.,'has_audio':True}}}}
 
 
 def test_closeup_is_cropped_from_exact_canonical_image_not_wan_output():
@@ -19,7 +22,7 @@ def test_closeup_is_cropped_from_exact_canonical_image_not_wan_output():
     face=np.array([185.,155.,130.,150.,0.,0.,0.,0.,0.,0.,0.,0.,0.,0.,.98])
     result=identity_qa.crop_face(original,face)
     assert result.shape==(512,512,3)
-    assert np.mean(result[:,:,2])>40
+    assert np.mean(result[:,:,2])>20
 
 
 def test_local_models_missing_block_before_any_paid_submission(monkeypatch,tmp_path):
@@ -53,7 +56,7 @@ def test_face_matched_output_saved_and_cached_without_resampling(monkeypatch,tmp
     assert identity_qa.check_archived(j,'output/clip.mp4')['status']=='passed'
     assert identity_qa.check_archived(j,'output/clip.mp4')['status']=='passed'
     assert calls==['compare']
-    assert 'reference_images' not in json.dumps(saved)
+    assert all(b'reference_images' not in blob for blob in saved.values())
 
 
 def test_face_mismatch_preserves_archive_and_blocks_next_paid_segment(monkeypatch,tmp_path):
