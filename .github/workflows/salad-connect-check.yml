@@ -6,6 +6,11 @@ on:
     paths:
       - ".github/workflows/salad-connect-check.yml"
       - "gpu-worker/salad_preflight.py"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/salad-connect-check.yml"
+      - "gpu-worker/salad_preflight.py"
   workflow_dispatch:
 
 permissions:
