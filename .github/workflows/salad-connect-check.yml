@@ -1,0 +1,25 @@
+name: Verify SaladCloud Organization (read-only)
+on:
+  push:
+    branches:
+      - feature/aria-nicole-creator-studio
+    paths:
+      - ".github/workflows/salad-connect-check.yml"
+      - "gpu-worker/salad_preflight.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  salad-readonly-auth:
+    name: Verify organization mgg1981 and project
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      SALAD_API_KEY: ${{ secrets.SALAD_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify authenticated read-only Salad API access
+        id: preflight
+        run: python3 gpu-worker/salad_preflight.py
