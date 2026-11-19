@@ -14,6 +14,7 @@ RUN python /tmp/fix_unlimited_spending.py && rm /tmp/fix_unlimited_spending.py
 RUN printf '\\n=== DIAGNOSTIC SOURCE FILES ===\\n' && find /app/recreation -maxdepth 1 -name '*.py' -printf '%f\\n' && printf '\\n=== TELEGRAM COMMAND AND REVIEW PATH ===\\n' && grep -R -n -C 10 -E '(\/generate|NEEDS_REVIEW|requeue|resume|def generate|def .*command|def .*owner)' /app/recreation/telegram.py /app/recreation/db.py /app/recreation/main.py /app/recreation/worker.py 2>/dev/null | head -n 350
 RUN printf '\\n=== FULL VIDEO STEP AND AUTO FLOW ===\\n' && grep -n -E '^def (step_key|segment_key|report|run_auto|_run_segments|_get_reused_first|_guard_auto)|RUN_KEY|CHAI[N]|SEGMENT|STEP_PREFIX' /app/recreation/full_video.py && sed -n '20,105p' /app/recreation/full_video.py && sed -n '210,325p' /app/recreation/full_video.py && sed -n '355,500p' /app/recreation/full_video.py && printf '\\n=== RECOVERY DB / TELEGRAM ===\\n' && sed -n '107,125p' /app/recreation/db.py && sed -n '182,214p' /app/recreation/telegram.py
 RUN pip install --no-cache-dir -r requirements.txt
+RUN PYTHONPATH=/app python -c "from recreation.identity_qa import install_models; install_models()"
 RUN RECREATION_RUN_KEY=nonsecret_probe_key PYTHONPATH=/app python -c "from recreation import full_video; assert full_video.RUN_KEY == 'nonsecret_probe_key'; assert full_video._reusable_canary({}) is False; print('RECREATION_RUNTIME_NAMESPACE_TEST passed=true')"
 RUN PYTHONPATH=/app pytest -q /app/tests
 RUN python -c "from recreation.main import app; assert app.title == 'Telegram Recreation Studio'"
