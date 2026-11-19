@@ -97,7 +97,8 @@ def test_running_revision_reuses_parent_six_clips_and_one_new_clip(monkeypatch):
     p=parent()
     j=revision()
     monkeypatch.setattr(db,'get_job',lambda job_id,owner_id:p)
-    monkeypatch.setattr(full_video,'_stored',lambda _:True)
+    monkeypatch.setattr(full_video,'_stored',
+                        lambda key: not key.endswith('section_revision/v1/segment_002.mp4'))
     monkeypatch.setattr(db,'get_step',lambda *a:None)
     monkeypatch.setenv('WORKER_MODE','app_always_on')
     monkeypatch.setenv('ENABLE_PAID_GENERATION','true')
