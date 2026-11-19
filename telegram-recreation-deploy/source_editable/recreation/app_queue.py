@@ -77,6 +77,18 @@ def process(job):
                    event=('local_salvage','Recovered existing paid clips without provider generation'))
         if done:LOG.info('LOCAL_SALVAGE completed=true job=%s provider_calls=0',job_id[:8])
         return
+    if stage=='SEGMENT_REDO':
+        status=segment_revision.run(job)
+        if status=='processing':
+            _next(job,stage='SEGMENT_REDO',state='WAITING_PROVIDER',
+                  current_segment=0,delay=12)
+        elif status=='completed':
+            done=_next(job,stage='DONE',state='COMPLETED',current_segment=1,
+                       event=('section_replaced','One section replaced, previous sections reused, owner video delivered'))
+            if done:LOG.info('SECTION_REDO completed=true job=%s',job_id[:8])
+        else:
+            raise RuntimeError('Unexpected single-section revision stage')
+        return
     if stage=='AUTO_GENERATE':
         status=full_video.run_auto(job)
         progress=db.count_auto_segments(job['job_id'])
