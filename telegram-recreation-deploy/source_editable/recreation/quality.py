@@ -19,7 +19,8 @@ SOURCE_OUTFIT = {'keep source clothing', 'same as source', 'original clothing',
                  'keep original outfit', ''}
 PHOTO_OUTFIT = {'same as reference image', 'the same as her identity image',
                 'as per reference photo', 'as per refenrence photo',
-                'same as identity photo', 'same as reference photo'}
+                'same as identity photo', 'same as reference photo',
+                'same as the identity image', 'same as her identity image'}
 
 
 def enabled(job):
