@@ -62,6 +62,25 @@ def main() -> int:
             return 3
         statuses[label] = code
         print(f"Public API {label} returned HTTP {code}.")
+    # New public API organizations listing is independent of the selected
+    # organization slug. 401 here means the REST API credential is rejected;
+    # 200 here means the credential works, so investigate slug/permissions.
+    try:
+        listing_status, organization_list = api_get("/v1/organizations", key)
+    except RuntimeError as exc:
+        print(f"Organization-list probe unavailable: {exc}")
+        listing_status, organization_list = None, {}
+    print(f"Public API organization-list status: HTTP {listing_status if listing_status is not None else 'unavailable'}.")
+    if listing_status == 200:
+        # Only report whether requested organization is present, never list
+        # user/account names or other organization identifiers in logs.
+        data = organization_list.get("items", organization_list.get("organizations", []))
+        if isinstance(data, list):
+            accessible = any(isinstance(x, dict) and
+                             x.get("name", x.get("slug")) == ORGANIZATION for x in data)
+            print(f"Requested organization found on first page: {accessible}")
+    statuses["organization-list"] = listing_status
+
     if any(code == 200 for code in statuses.values()):
         print("Salad public API credentials verified against a real organization endpoint.")
     else:
