@@ -1,5 +1,10 @@
 name: Publish Salad image worker
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "gpu-worker/**"
+      - ".github/workflows/salad-worker-build.yml"
   workflow_dispatch:
     inputs:
       image_tag:
@@ -10,7 +15,9 @@ permissions:
   contents: read
 jobs:
   publish:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feature/aria-nicole-creator-studio')
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -28,4 +35,4 @@ jobs:
           file: ./gpu-worker/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/mg2121u/aria-nicole-gpu-worker:${{ inputs.image_tag }}
+          tags: ghcr.io/mg2121u/aria-nicole-gpu-worker:pilot-${{ github.sha }}

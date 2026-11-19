@@ -53,12 +53,26 @@ def main() -> int:
         print(str(exc))
         return 3
     if code != 200:
-        reason = {
-            401: "API key rejected",
-            403: "API key lacks access to the organization",
-            404: "Organization slug not found or inaccessible",
-            429: "API rate limiting"
-        }.get(code, f"HTTP {code}")
+        # Check the API's organization-list endpoint to differentiate an
+        # invalid credential from a valid credential scoped to another org.
+        secondary = None
+        if code in (401, 403, 404):
+            try:
+                secondary, _ = api_get("/v1/organizations", key)
+            except RuntimeError:
+                secondary = None
+        if code == 401 and secondary == 200:
+            reason = "Key accepted by organization-list endpoint, but quota lookup rejected; check the selected organization slug or permissions"
+        elif code == 401 and secondary == 401:
+            reason = "Salad API key rejected by both authorization endpoints; replace GitHub SALAD_API_KEY with a fresh SaladCloud REST API key"
+        elif code == 401:
+            reason = "Quota endpoint returned 401; check SaladCloud REST API key and organization access"
+        else:
+            reason = {
+                403: "API key lacks access to the organization",
+                404: "Organization slug not found or inaccessible",
+                429: "API rate limiting"
+            }.get(code, f"HTTP {code}")
         print(f"BLOCKED: {reason}.")
         summary(["## SaladCloud connection blocked", f"Organization: {ORGANIZATION}", reason])
         return 4
