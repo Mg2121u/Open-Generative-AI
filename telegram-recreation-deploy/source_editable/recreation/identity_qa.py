@@ -17,7 +17,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import storage
+from . import storage, provider
 
 LOG=logging.getLogger('identity-qa')
 MODEL_ROOT=Path(os.environ.get('RECREATION_FACE_MODEL_DIR','/app/face_models'))
@@ -26,7 +26,7 @@ RECOGNIZER=MODEL_ROOT/'face_recognition_sface_2021dec.onnx'
 COSINE_THRESHOLD=0.363  # OpenCV Zoo's published default for SFace
 
 
-class IdentityQualityReview(RuntimeError):
+class IdentityQualityReview(provider.NeedsReview):
     """Preserve completed provider output, require human review before next bill."""
 
 
