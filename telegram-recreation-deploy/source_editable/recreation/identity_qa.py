@@ -30,6 +30,54 @@ class IdentityQualityReview(provider.NeedsReview):
     """Preserve completed provider output, require human review before next bill."""
 
 
+def install_models():
+    """Download trusted OpenCV Zoo ONNX assets at IMAGE BUILD time only.
+
+    The models are generic pretrained face geometry, not copies of Nicole.
+    Normal video jobs never download models or expose owner media to the web.
+    """
+    from urllib.request import Request, urlopen
+    from urllib.error import URLError
+    MODEL_ROOT.mkdir(parents=True,exist_ok=True)
+    definitions=[
+        (DETECTOR, 'models/face_detection_yunet/face_detection_yunet_2023mar.onnx', 100_000),
+        (RECOGNIZER,'models/face_recognition_sface/face_recognition_sface_2021dec.onnx',5_000_000)
+    ]
+    for target,remote,minimum in definitions:
+        if target.is_file() and target.stat().st_size>=minimum:continue
+        urls=[
+            'https://huggingface.co/opencv/opencv_zoo/resolve/main/'+remote+'?download=true',
+            'https://raw.githubusercontent.com/opencv/opencv_zoo/main/'+remote
+        ]
+        last=None
+        for url in urls:
+            tmp=target.with_suffix('.download')
+            try:
+                req=Request(url,headers={'User-Agent':'NicoleIdentityQABuild/1.0'})
+                n=0
+                with urlopen(req,timeout=100) as source,tmp.open('wb') as sink:
+                    while True:
+                        data=source.read(1024*1024)
+                        if not data:break
+                        n+=len(data)
+                        if n>70_000_000:
+                            raise ValueError('OpenCV face model exceeds expected maximum size')
+                        sink.write(data)
+                if n<minimum:
+                    raise ValueError('Downloaded face model is incomplete')
+                tmp.replace(target)
+                break
+            except (OSError,URLError,ValueError) as exc:
+                last=exc
+                tmp.unlink(missing_ok=True)
+        if not target.is_file():
+            raise RuntimeError(
+                f'Failed to retrieve official OpenCV Zoo model {target.name}: '
+                f'{type(last).__name__}')
+    load_models()
+    LOG.info('FACE_QA_MODELS_READY detector=true recognizer=true local_only=true')
+
+
 def load_models():
     if not DETECTOR.is_file() or DETECTOR.stat().st_size<100_000:
         raise IdentityQualityReview('Nicole face detector is not installed; paid generation blocked')
