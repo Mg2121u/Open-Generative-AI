@@ -170,6 +170,8 @@ def process_message(message):
         say(chat,'Send /new first.');return
     if (job.get('checkpoint') or {}).get('segment_revision') and cmd in ('/generate','/archive','/preflight','/identity'):
         say(chat,'This draft replaces one section only. Use /confirm_segment to authorize it, or /new for a new video.');return
+    if (job.get('checkpoint') or {}).get('segment_revision') and cmd in ('/character','/model','/voice','/voiceover'):
+        say(chat,'Section revisions retain Nicole, Wan 3.0 and the original soundtrack. Change only /instructions, /scenery or /clothes.');return
     if cmd in ('/scenery','/clothes','/instructions','/character','/model','/voice','/voiceover'):
         if not value.strip():
             say(chat,f'Send {cmd} followed by your requested value.');return
