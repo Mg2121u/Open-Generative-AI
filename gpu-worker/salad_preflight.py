@@ -47,34 +47,51 @@ def main() -> int:
         print("BLOCKED: SALAD_API_KEY is missing from GitHub Actions secrets.")
         summary(["## SaladCloud connection blocked", "Add the SALAD_API_KEY repository Actions secret."])
         return 2
-    try:
-        code, _ = api_get(f"/organizations/{ORGANIZATION}/quotas", key)
-    except RuntimeError as exc:
-        print(str(exc))
-        return 3
-    if code != 200:
-        # Check the API's organization-list endpoint to differentiate an
-        # invalid credential from a valid credential scoped to another org.
-        secondary = None
-        if code in (401, 403, 404):
-            try:
-                secondary, _ = api_get("/v1/organizations", key)
-            except RuntimeError:
-                secondary = None
-        if code == 401 and secondary == 200:
-            reason = "Key accepted by organization-list endpoint, but quota lookup rejected; check the selected organization slug or permissions"
-        elif code == 401 and secondary == 401:
-            reason = "Salad API key rejected by both authorization endpoints; replace GitHub SALAD_API_KEY with a fresh SaladCloud REST API key"
-        elif code == 401:
-            reason = "Quota endpoint returned 401; check SaladCloud REST API key and organization access"
+    # Use two independently documented, read-only public-API routes.
+    # The older fallback to /v1/organizations was not a valid endpoint.
+    endpoints = [
+        ("organization quotas", f"/organizations/{ORGANIZATION}/quotas"),
+        ("GPU class catalog", f"/organizations/{ORGANIZATION}/gpu-classes"),
+    ]
+    statuses = {}
+    for label, path in endpoints:
+        try:
+            code, _ = api_get(path, key)
+        except RuntimeError as exc:
+            print(f"Connectivity problem at {label}: {exc}")
+            return 3
+        statuses[label] = code
+        print(f"Public API {label} returned HTTP {code}.")
+    if any(code == 200 for code in statuses.values()):
+        print("Salad public API credentials verified against a real organization endpoint.")
+    else:
+        # Only print non-sensitive shape diagnostics. Never print any portion
+        # of the secret, its exact length, or an identifying checksum.
+        raw_key = os.getenv("SALAD_API_KEY", "")
+        wrapped = raw_key.startswith(("Bearer ", "Salad-Api-Key:", "'", '"'))
+        looks_like_placeholder = raw_key.lower() in {
+            "your-api-key", "your_api_key", "api_key", "paste_your_api_key_here"
+        }
+        print("Secret is set:", bool(raw_key))
+        print("Secret is at least 20 characters:", len(raw_key.strip()) >= 20)
+        print("Secret appears to include a header prefix or quote wrapper:", wrapped)
+        print("Secret resembles a placeholder:", looks_like_placeholder)
+        if all(c == 401 for c in statuses.values()):
+            reason = "Both documented API endpoints rejected the saved credentials (HTTP 401)"
+        elif any(c == 403 for c in statuses.values()):
+            reason = "Credentials may lack permission for organization mgg1981 (HTTP 403)"
+        elif any(c == 404 for c in statuses.values()):
+            reason = "Organization name or endpoint accessibility needs review (HTTP 404)"
         else:
-            reason = {
-                403: "API key lacks access to the organization",
-                404: "Organization slug not found or inaccessible",
-                429: "API rate limiting"
-            }.get(code, f"HTTP {code}")
-        print(f"BLOCKED: {reason}.")
-        summary(["## SaladCloud connection blocked", f"Organization: {ORGANIZATION}", reason])
+            reason = "Unexpected API responses: " + str(statuses)
+        print("BLOCKED:", reason)
+        summary([
+            "## SaladCloud read-only verification blocked",
+            "- Organization: mgg1981",
+            "- " + reason,
+            "- No GPU instances created, started, or billed",
+            "- The API key itself was never printed",
+        ])
         return 4
 
     print(f"Salad API authentication succeeded for organization {ORGANIZATION}.")
