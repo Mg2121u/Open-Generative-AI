@@ -6,7 +6,7 @@ are reserved in recreation_steps, preventing duplicate charges after restart.
 import logging
 import tempfile
 from pathlib import Path
-from . import db,ffmpeg,storage,telegram,full_video,preflight
+from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision
 
 LOG=logging.getLogger('app-queue')
 
