@@ -145,8 +145,13 @@ def build_prompt(job, *, chained=False):
         'controls the location. Continue the physical dance without resetting, '
         'teleporting or morphing between poses. '
     ) if chained else (
-        'NO previous generated frame is supplied. Start at the opening pose ' 
-        'of the current Video 1 motion interval, using original Nicole in Image 1. ' 
+        'IMAGE 2 is a close-up crop of NICOLE FROM IMAGE 1, not another woman. '
+        'Its sole purpose is to reinforce her exact facial identity: same eyes, '
+        'eyelids, nose bridge, lips, cheeks, jaw, facial proportions, skin texture '
+        'and hairline in every frame. Image 1 controls body, hair, outfit and '
+        'full-body appearance. NEVER substitute the face from Video 1. '
+        'NO previous generated frame is supplied. Start at the opening pose '
+        'of the current Video 1 motion interval, using original Nicole in Image 1. '
         'Maintain her exact proportions and wardrobe across the entire clip. '
     )
     stability = (
