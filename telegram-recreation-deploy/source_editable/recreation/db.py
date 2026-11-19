@@ -455,7 +455,7 @@ def claim_app(worker,seconds=240):
     with connect() as conn:
         return conn.execute("""WITH selected AS (
             SELECT job_id FROM recreation_jobs WHERE owner_id=ANY(%s::bigint[])
-            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE')
+            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE','SEGMENT_REDO')
             AND state IN ('QUEUED','RUNNING','WAITING_PROVIDER')
             AND next_attempt_at<=now()
             AND (lease_until IS NULL OR lease_until<now())
