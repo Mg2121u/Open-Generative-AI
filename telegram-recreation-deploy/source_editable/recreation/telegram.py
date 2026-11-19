@@ -43,7 +43,7 @@ def show(job):
             saved=conn.execute("""SELECT count(*) AS n FROM recreation_steps
                 WHERE job_id=%s AND step_key='wan_individual_section_revision_v1'
                   AND state='COMPLETED'""",(job['job_id'],)).fetchone()['n']
-    elif job['stage'] in ('AUTO_GENERATE','DONE'):
+    elif job['stage'] in ('AUTO_GENERATE','QA_OWNER_APPROVED','DONE'):
         from .full_video import RUN_KEY
         with db.connect() as conn:
             saved=conn.execute('SELECT count(*) AS n FROM recreation_steps WHERE job_id=%s AND step_key LIKE %s AND state=%s',
@@ -57,7 +57,10 @@ def show(job):
         f'Nicole identity: {((job.get("checkpoint") or {}).get("identity") or {}).get("status", "missing")}\n'
         f'Generated sections: {saved} / {job["segment_total"] or "pending plan"}\n'
         f'Local FFmpeg preview: {"complete" if (job.get("checkpoint") or {}).get("local_preflight",{}).get("complete") else "not completed"}\n'
-        + (f'Issue: {job["last_error"][:400]}' if job['last_error'] else ''))
+        + (f'Issue: {job["last_error"][:400]}' if job['last_error'] else '')
+        + ('\\nQA: owner accepted a failed face match (NOT verified)' if
+           ((job.get('checkpoint') or {}).get('quality_override') or {}).get('type')=='owner_accepted_facial_mismatch'
+           else ''))
 
 
 def process_message(message):
@@ -75,7 +78,7 @@ def process_message(message):
     if not ALLOWED_USERS or int(owner) not in ALLOWED_USERS:
         say(chat,'This app is private. Send /id to retrieve your ID for access.'); return
     if cmd in ('/start','/help'):
-        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
+        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept mismatched face and deliver, no Wan cost\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
         return
     if cmd=='/new':
         job=db.create_draft(chat,owner)
@@ -89,6 +92,37 @@ def process_message(message):
                   'scenery and outfit are reused. The old result stays untouched. '
                   'No new AI charges yet. Use /fullplan to see the updated plan, '
                   'or /generate to authorize the new paid Wan 480p run.')
+        return
+    if cmd in ('/review_qa','/approve_qa'):
+        from . import full_video
+        prefix=value.strip().lower()
+        try:
+            review=db.qa_review_job(owner,prefix)
+            if not review:
+                say(chat,'No matching one-section Nicole face-mismatch review job was found. Check the exact 8-character job ID in /status.')
+                return
+            job_id=str(review['job_id'])
+            clip=full_video.segment_key(job_id,0)
+            step=db.get_step(job_id,full_video.step_key(0))
+            if (not step or step.get('state')!='COMPLETED'
+                    or not full_video._stored(clip)):
+                say(chat,'The previously paid clip is not fully archived, so approval is blocked. No new generation was triggered.')
+                return
+            if cmd=='/review_qa':
+                telegram('sendVideo',{'chat_id':chat,
+                    'video':full_video.storage.presign(clip,3600),
+                    'caption':('Review ONLY: job '+prefix+
+                               ' FAILED Nicole face QA. '+str(review['last_error'])[:150]+
+                               ' To ACCEPT the mismatch as-is, send /approve_qa '+prefix+
+                               '. This does not improve the face or charge Wan.')})
+                return
+            queued=db.approve_qa_review(job_id,owner,expected_step=full_video.step_key(0))
+            say(chat,('Owner QA override accepted. Reassembling the already-paid clip '
+                      'and original soundtrack for private delivery. No new Wan request '
+                      'will be made. The failed facial match remains recorded. Check /status.'
+                      if queued else 'Approval not queued: the saved job is not eligible or was already approved. No new Wan charge.'))
+        except (ValueError,TypeError,KeyError) as exc:
+            say(chat,'QA review command unavailable: '+str(exc)[:300])
         return
     if cmd in ('/segments','/view_segment','/redo_segment'):
         # One-based section numbers to avoid exposing internal zero-based
