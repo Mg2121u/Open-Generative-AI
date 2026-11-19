@@ -89,7 +89,7 @@ def test_revision_draft_reuses_parent_and_no_paid_requests(monkeypatch):
     assert len(statements)==2
     assert "'SEGMENT_REDO'" in statements[-1][0]
     assert statements[-1][1][0]!=parent()['job_id']
-    assert statements[-1][1][5]==parent()['outfit']
+    assert statements[-1][1][6]==parent()['outfit']
     assert 'original_key' in statements[-1][0]
 
 
