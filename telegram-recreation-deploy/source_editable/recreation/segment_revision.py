@@ -15,7 +15,7 @@ import math
 import os
 from urllib.parse import unquote, urlsplit
 
-from . import db, full_video, provider, quality, storage, wan_canary
+from . import db, full_video, provider, quality, storage, wan_canary, identity_qa
 
 LOG=logging.getLogger('segment-revision')
 REVISION_STEP='wan_individual_section_revision_v1'
@@ -92,7 +92,7 @@ def _verified_existing_step(job,step,index,parent):
     vids=payload.get('reference_videos') or []
     identity=(parent['checkpoint']['identity'])['nicole_image_key']
     motion=full_video.source_key(str(parent['job_id']),index)
-    if (len(pics)!=1 or len(vids)!=1
+    if (len(pics) not in (1,2) or len(vids)!=1
             or identity not in unquote(urlsplit(pics[0]).path)
             or motion not in unquote(urlsplit(vids[0]).path)):
         raise provider.NeedsReview('Saved Wan request used unexpected identity/motion references')
@@ -109,10 +109,13 @@ def run(job):
             _guard_paid(job,segments[index]['estimated_usd'])
             clip=(parent.get('checkpoint') or {})['local_preflight']['source_probe']
             identity=(parent.get('checkpoint') or {})['identity']['nicole_image_key']
+            refs=[storage.presign(identity,3600)]
+            if os.getenv('RECREATION_FACE_QA_MODE','on').lower()!='off':
+                anchor=identity_qa.prepare_anchor(job)
+                refs.append(storage.presign(anchor,3600))
             payload=wan_canary.payload_for(
                 storage.presign(motion,3600),
-                clip['width'],clip['height'],
-                [storage.presign(identity,3600)]
+                clip['width'],clip['height'],refs
             )
             payload['prompt']=quality.build_prompt(job,chained=False)
             payload['seed']=quality.fixed_seed(job)
@@ -134,6 +137,7 @@ def run(job):
             raise provider.NeedsReview('Completed section request has no usable video URL')
         storage.store_provider_url(provider_outputs[0],replaced)
         LOG.info('SECTION_REDO archived job=%s section=%d',job_id[:8],index+1)
+    identity_qa.check_archived(job,replaced)
     stitched=list(original_keys)
     stitched[index]=replaced
     output=final_key(job)
