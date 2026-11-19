@@ -6,7 +6,7 @@ are reserved in recreation_steps, preventing duplicate charges after restart.
 import logging
 import tempfile
 from pathlib import Path
-from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision
+from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision,qa_owner_approval
 
 LOG=logging.getLogger('app-queue')
 
@@ -76,6 +76,15 @@ def process(job):
                    current_segment=job['segment_total'],
                    event=('local_salvage','Recovered existing paid clips without provider generation'))
         if done:LOG.info('LOCAL_SALVAGE completed=true job=%s provider_calls=0',job_id[:8])
+        return
+    if stage=='QA_OWNER_APPROVED':
+        status=qa_owner_approval.run(job)
+        if status!='completed':
+            raise RuntimeError('Local QA-owner-approval did not complete')
+        done=_next(job,stage='DONE',state='COMPLETED',current_segment=1,
+                   event=('owner_qa_accepted',
+                          'Owner accepted failed face check and received archived clip without new generation'))
+        if done:LOG.info('OWNER_QA_OVERRIDE completed job=%s provider_calls=0',job_id[:8])
         return
     if stage=='SEGMENT_REDO':
         status=segment_revision.run(job)
