@@ -78,6 +78,99 @@ def create_redo_from_latest(chat_id, owner_id):
         )).fetchone()
     return {'job_id': str(row['job_id']), 'from_job': str(previous['job_id'])}
 
+
+def completed_segment_job(owner_id, prefix=None):
+    """Resolve a completed OWNED video, not a prior revision or somebody else's.
+
+    The eight-character job prefix is display-only, never used as a dynamic
+    table or storage identifier. The next stage verifies each archived clip.
+    """
+    import re
+    if prefix is not None and not re.fullmatch(r'[0-9a-f]{8}',str(prefix).lower()):
+        raise ValueError('Specify the 8-character job ID shown in /status')
+    with connect() as conn:
+        rows=conn.execute("""SELECT * FROM recreation_jobs
+            WHERE owner_id=%s AND character='NICOLE' AND state='COMPLETED'
+              AND stage='DONE' AND segment_total>0
+              AND original_key IS NOT NULL
+              AND checkpoint#>>'{identity,status}'='ready'
+              AND checkpoint#>>'{local_preflight,source_key}'=original_key
+              AND checkpoint->'segment_revision' IS NULL
+              AND (%s::text IS NULL OR left(job_id::text,8)=%s::text)
+            ORDER BY created_at DESC LIMIT 2""",
+            (owner_id,prefix,prefix)).fetchall()
+    if prefix and len(rows)>1:
+        raise ValueError('The job ID prefix is ambiguous')
+    return rows[0] if rows else None
+
+
+def create_segment_revision(chat_id,owner_id,parent_prefix,section_number):
+    """Unbilled draft for one original section; parent remains immutable."""
+    import uuid as _uuid
+    from . import quality,full_video
+    original=completed_segment_job(owner_id,parent_prefix)
+    if not original:
+        raise ValueError('Completed original Nicole video not found for this owner')
+    preflight=(original.get('checkpoint') or {}).get('local_preflight') or {}
+    identity=(original.get('checkpoint') or {}).get('identity') or {}
+    if not preflight.get('complete') or not identity.get('nicole_image_key'):
+        raise ValueError('Original source or Nicole reference is missing')
+    duration=(preflight.get('source_probe') or {}).get('duration')
+    plan=quality.quality_plan(duration)
+    if len(plan)!=int(original['segment_total']):
+        raise ValueError('The completed video uses an incompatible segment plan; single-section replacement is blocked')
+    if not 1<=int(section_number)<=len(plan):
+        raise ValueError(f'Choose a section from 1 to {len(plan)}')
+    # Verify the completed predictions from this exact run. Historical v2/v3
+    # generations cannot be silently combined with the v4 output namespace.
+    with connect() as conn:
+        existing=conn.execute("""SELECT count(*) AS n FROM recreation_steps
+            WHERE job_id=%s AND state='COMPLETED'
+              AND step_key LIKE %s""",(
+            original['job_id'],f'wan_{full_video.RUN_KEY}_segment_%')).fetchone()['n']
+        if existing!=len(plan):
+            raise ValueError('Only fully completed current-run sections may be replaced; older runs need a separate migration')
+        rev_id=_uuid.uuid4()
+        index=int(section_number)-1
+        cp={
+            'identity':identity,
+            'local_preflight':preflight,
+            'segment_revision':{
+                'parent_job_id':str(original['job_id']),
+                'parent_run_key':full_video.RUN_KEY,
+                'section_index':index,
+                'parent_sections':len(plan),
+                'revision_version':1
+            }
+        }
+        conn.execute("""INSERT INTO recreation_jobs
+            (job_id,chat_id,owner_id,character,model,source_file_id,
+             original_key,scenery,outfit,instructions,voiceover_voice,
+             checkpoint,stage,segment_total,current_segment)
+            VALUES (%s,%s,%s,'NICOLE','wan-3.0',%s,%s,%s,%s,%s,%s,
+                    %s,'SEGMENT_REDO',1,0)""",(
+            rev_id,chat_id,owner_id,original['source_file_id'],
+            original['original_key'],original['scenery'],original['outfit'],
+            original['instructions'],original['voiceover_voice'],Jsonb(cp)))
+    segment=plan[index]
+    return {'job_id':str(rev_id),'parent_id':str(original['job_id']),
+            'number':section_number,'total':len(plan),
+            'start':segment['start'],'end':round(segment['start']+segment['duration'],2),
+            'estimate':segment['estimated_usd']}
+
+
+def queue_segment_revision(job_id,owner_id):
+    """Only the owner's explicit /confirm_segment can queue a new paid call."""
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs
+            SET state='QUEUED',next_attempt_at=now(),
+                lease_until=NULL,lease_owner=NULL,attempt=0,last_error=NULL,
+                updated_at=now()
+            WHERE job_id=%s AND owner_id=%s AND state='DRAFT'
+              AND stage='SEGMENT_REDO'
+              AND checkpoint#>>'{segment_revision,parent_job_id}' IS NOT NULL
+            RETURNING job_id""",(job_id,owner_id)).fetchone()
+
 def get_job(job_id, owner_id=None):
     with connect() as conn:
         return conn.execute('SELECT * FROM recreation_jobs WHERE job_id = %s AND (%s::bigint IS NULL OR owner_id = %s)',
