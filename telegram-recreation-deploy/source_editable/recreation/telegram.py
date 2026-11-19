@@ -38,7 +38,12 @@ def say(chat,text):
 def show(job):
     if not job: return 'No recreation job found. Send /new to begin.'
     saved=len(job['outputs'])
-    if job['stage'] in ('AUTO_GENERATE','DONE'):
+    if (job.get('checkpoint') or {}).get('segment_revision'):
+        with db.connect() as conn:
+            saved=conn.execute("""SELECT count(*) AS n FROM recreation_steps
+                WHERE job_id=%s AND step_key='wan_individual_section_revision_v1'
+                  AND state='COMPLETED'""",(job['job_id'],)).fetchone()['n']
+    elif job['stage'] in ('AUTO_GENERATE','DONE'):
         from .full_video import RUN_KEY
         with db.connect() as conn:
             saved=conn.execute('SELECT count(*) AS n FROM recreation_steps WHERE job_id=%s AND step_key LIKE %s AND state=%s',
@@ -70,7 +75,7 @@ def process_message(message):
     if not ALLOWED_USERS or int(owner) not in ALLOWED_USERS:
         say(chat,'This app is private. Send /id to retrieve your ID for access.'); return
     if cmd in ('/start','/help'):
-        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
+        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
         return
     if cmd=='/new':
         job=db.create_draft(chat,owner)
@@ -85,7 +90,73 @@ def process_message(message):
                   'No new AI charges yet. Use /fullplan to see the updated plan, '
                   'or /generate to authorize the new paid Wan 480p run.')
         return
+    if cmd in ('/segments','/view_segment','/redo_segment'):
+        # One-based section numbers to avoid exposing internal zero-based
+        # indices. Optional job ID is an EXACT eight-character owner prefix.
+        from . import quality,full_video
+        args=value.strip().split()
+        try:
+            if cmd=='/segments':
+                if len(args)>1:raise ValueError('Use /segments or /segments f6634b83')
+                parent=db.completed_segment_job(owner,args[0].lower() if args else None)
+                if not parent:raise ValueError('No completed original Nicole video available')
+                duration=parent['checkpoint']['local_preflight']['source_probe']['duration']
+                segments=quality.quality_plan(duration)
+                if len(segments)!=parent['segment_total']:
+                    raise ValueError('This video uses an older section plan; do not mix versions')
+                lines=[f'Completed video {str(parent["job_id"])[:8]}: {len(segments)} sections']
+                lines.extend(f'{seg["index"]+1}: {seg["start"]:.1f}s–{seg["start"]+seg["duration"]:.1f}s'
+                             for seg in segments[:55])
+                lines.append('Preview: /view_segment '+str(parent["job_id"])[:8]+' N')
+                lines.append('Redo one: /redo_segment '+str(parent["job_id"])[:8]+' N')
+                say(chat,'\n'.join(lines))
+            else:
+                if len(args)==1:
+                    prefix=None
+                    number=int(args[0])
+                elif len(args)==2:
+                    prefix=args[0].lower()
+                    number=int(args[1])
+                else:
+                    raise ValueError('Use /redo_segment f6634b83 3 (or /view_segment f6634b83 3)')
+                if cmd=='/redo_segment':
+                    draft=db.create_segment_revision(chat,owner,prefix,number)
+                    say(chat, f'Single-section draft {draft["job_id"][:8]} ready.\n'
+                        f'Original video: {draft["parent_id"][:8]}\n'
+                        f'Only section {number}/{draft["total"]}: {draft["start"]:.1f}–{draft["end"]:.1f} seconds\n'
+                        f'Estimated one-section Wan cost: ${draft["estimate"]:.2f} (provider actual may vary)\n'
+                        'All other sections and the original audio will be reused. '
+                        'Old completed video is unchanged.\n'
+                        'Use /instructions to adjust this section if needed. '
+                        'Send /confirm_segment to authorize the ONE paid Wan generation. '
+                        'Nothing has been charged yet.')
+                else:
+                    parent=db.completed_segment_job(owner,prefix)
+                    if not parent:raise ValueError('Completed original Nicole video not found')
+                    segments=quality.quality_plan(
+                        parent['checkpoint']['local_preflight']['source_probe']['duration'])
+                    if len(segments)!=parent['segment_total'] or not 1<=number<=len(segments):
+                        raise ValueError('Invalid section number for this completed video')
+                    clip=full_video.segment_key(str(parent['job_id']),number-1)
+                    if not full_video._stored(clip):
+                        raise ValueError('This archived section is currently unavailable')
+                    telegram('sendVideo',{'chat_id':chat,'video':full_video.storage.presign(clip,3600),
+                                         'caption':f'Original video {str(parent["job_id"])[:8]} · section {number}/{len(segments)} · preview (no AI charge)'})
+        except (ValueError,TypeError,KeyError) as exc:
+            say(chat,'Section command unavailable: '+str(exc)[:300])
+        return
     job=db.latest_job(owner)
+    if cmd=='/confirm_segment':
+        if not job or job.get('stage')!='SEGMENT_REDO':
+            say(chat,'Create a section draft first with /redo_segment f6634b83 3.');return
+        if os.getenv('ENABLE_PAID_GENERATION','false').lower()!='true':
+            say(chat,'Paid Wan generation is disabled. Your single-section draft is preserved.');return
+        updated=db.queue_segment_revision(job['job_id'],owner)
+        say(chat,('Confirmed: exactly ONE new Wan section has been queued. '
+                  'The other sections will be reused without provider calls. '
+                  'Your original video is untouched. Use /status to follow progress.'
+                  if updated else 'Section revision is already running or was previously confirmed; no duplicate charge queued.'))
+        return
     # Sending a video is the ordinary way to begin another recreation. If the
     # previous job has already started/completed, create a fresh draft and carry
     # forward only this owner's saved Nicole identity image. No AI is charged.
@@ -97,6 +168,8 @@ def process_message(message):
     if cmd=='/status': say(chat,show(job));return
     if not job:
         say(chat,'Send /new first.');return
+    if (job.get('checkpoint') or {}).get('segment_revision') and cmd in ('/generate','/archive','/preflight','/identity'):
+        say(chat,'This draft replaces one section only. Use /confirm_segment to authorize it, or /new for a new video.');return
     if cmd in ('/scenery','/clothes','/instructions','/character','/model','/voice','/voiceover'):
         if not value.strip():
             say(chat,f'Send {cmd} followed by your requested value.');return
@@ -153,6 +226,8 @@ def process_message(message):
         return
     media=incoming_video
     if media:
+        if (job.get('checkpoint') or {}).get('segment_revision'):
+            say(chat,'Cannot change the source on a single-section revision. Use /new for a different video.');return
         size=media.get('file_size',0)
         if size>20_000_000 and BOT_API_URL=='https://api.telegram.org':
             say(chat,'This source is over the cloud Bot API 20 MB download limit. Configure the local Telegram Bot API server first so the large file can be processed without shrinking it.');return
