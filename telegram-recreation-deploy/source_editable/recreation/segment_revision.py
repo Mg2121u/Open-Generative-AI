@@ -99,7 +99,14 @@ def _verified_existing_step(job,step,index,parent):
     motion=full_video.source_key(str(parent['job_id']),index)
     scene=quality.scene_reference(job)
     scene_key=scene.get('scenery_image_key') if scene.get('status')=='ready' else None
-    scene_ok=(not scene_key or (len(pics)>=2 and scene_key in unquote(urlsplit(pics[-1]).path)))
+    if scene_key:
+        face_key=f'recreation/{job["job_id"]}/identity/nicole_face_closeup_v1.jpg'
+        scene_ok=(len(pics)==3
+                  and face_key in unquote(urlsplit(pics[1]).path)
+                  and scene_key in unquote(urlsplit(pics[2]).path)
+                  and payload.get('generate_audio') is False)
+    else:
+        scene_ok=True
     if (len(pics) not in (1,2,3) or len(vids)!=1 or not scene_ok
             or identity not in unquote(urlsplit(pics[0]).path)
             or motion not in unquote(urlsplit(vids[0]).path)):
@@ -118,21 +125,24 @@ def run(job):
             clip=(parent.get('checkpoint') or {})['local_preflight']['source_probe']
             identity=(parent.get('checkpoint') or {})['identity']['nicole_image_key']
             refs=[storage.presign(identity,3600)]
+            scene=quality.scene_reference(job)
+            uses_photo_scene=scene.get('status')=='ready'
             face_anchor=False
-            if os.getenv('RECREATION_FACE_QA_MODE','on').lower()!='off':
+            if uses_photo_scene or os.getenv('RECREATION_FACE_QA_MODE','on').lower()!='off':
                 anchor=identity_qa.prepare_anchor(job)
                 refs.append(storage.presign(anchor,3600))
                 face_anchor=True
-            scene=quality.scene_reference(job)
             scene_number=None
-            if scene.get('status')=='ready':
+            if uses_photo_scene:
                 scene_key=scene['scenery_image_key']
                 if not full_video._stored(scene_key):
                     raise provider.NeedsReview('Archived scenery reference is missing; no paid regeneration')
-                scene_number=len(refs)+1
-                if scene_number>3:
-                    raise provider.NeedsReview('Scenery image would exceed model reference limit')
+                if len(refs)!=2 or not face_anchor:
+                    raise provider.NeedsReview('Nicole face reference must be Image 2 before scenery Image 3')
                 refs.append(storage.presign(scene_key,3600))
+                scene_number=3
+                if len(refs)!=3:
+                    raise provider.NeedsReview('Three reference images required for photo-scene revision')
             payload=wan_canary.payload_for(
                 storage.presign(motion,3600),
                 clip['width'],clip['height'],refs
@@ -143,6 +153,9 @@ def run(job):
             payload['seed']=quality.fixed_seed(job)
             payload['duration']=segments[index]['output_seconds']
             payload['generate_audio']=False
+            if uses_photo_scene:
+                payload['enable_prompt_expansion']=False
+                LOG.info('SECTION_REDO photo_scene=true roles=nicole_body,nicole_face,scenery source_video=motion_only')
             LOG.info('SECTION_REDO submit job=%s section=%d cost_estimate=%.2f',
                      job_id[:8],index+1,segments[index]['estimated_usd'])
             step=provider.submit_once(job_id,REVISION_STEP,wan_canary.MODEL,payload)
