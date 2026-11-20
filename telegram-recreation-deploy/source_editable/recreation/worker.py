@@ -90,7 +90,27 @@ def loop():
                 db.checkpoint(job['job_id'],WORKER_ID,state='NEEDS_REVIEW',
                     fields={'last_error':str(exc)[:650]},
                     event=('manual_review',str(exc)[:300]))
-                try: telegram.say(job['chat_id'],'Job paused for safe review. Your existing segments and provider request IDs are preserved. Use /status for details.')
+                try:
+                    reason=str(exc)
+                    if (job.get('stage')=='AUTO_GENERATE'
+                            and (reason.startswith('Nicole facial identity QA mismatch:')
+                                 or reason.startswith('Nicole facial identity QA unverified:'))):
+                        short=str(job['job_id'])[:8]
+                        telegram.say(job['chat_id'],
+                            f'Nicole face QA flagged an already-paid section on job {short}. '
+                            'The generated clip is archived. '
+                            f'Preview it with /review_qa {short}. '
+                            f'If you accept the imperfect face, send /approve_qa {short} '
+                            'to deliver the single section or resume remaining sections. '
+                            'Any remaining new sections may incur their normal Wan cost; '
+                            'existing paid sections will not be regenerated. '
+                            'Provider request IDs and failed-QA evidence are preserved.')
+                    else:
+                        telegram.say(job['chat_id'],
+                            'Job paused for a provider or processing safety review. '
+                            'Existing provider request IDs are preserved. '
+                            'Use /status for the precise issue. '
+                            'Uncertain paid submissions cannot be retried by a generic approval.')
                 except Exception: logger.exception('Could not notify user')
             except Exception as exc:
                 logger.exception('Worker stage failed: stage=%s job=%s error_type=%s',job['stage'],str(job['job_id'])[:8],type(exc).__name__)
