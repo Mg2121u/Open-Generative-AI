@@ -1,5 +1,7 @@
 """Salad image worker: persistent private S3 or ephemeral one-replica pilot."""
 import io
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -17,6 +19,7 @@ from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 from local_store import EphemeralStore
 from pydantic import BaseModel, Field
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 def normalize_salad_environment():
     """Accept the legacy auto-converted names shown in the user's Salad group.
@@ -63,6 +66,7 @@ class Job(BaseModel):
     prompt: str = Field(min_length=3, max_length=3000)
     aspect_ratio: str = "9:16"
     reference_image_url: str | None = None
+    reference_images: dict[str, str] = Field(default_factory=dict)
     duration: int | None = None
 
 def authorize(authorization: str | None = Header(default=None)):
@@ -157,6 +161,35 @@ def readyz():
         raise HTTPException(503, "Model or S3 not yet ready")
     return {"status": "ready"}
 
+def decode_private_reference(value: str):
+    """Decode only local inline image bytes; never fetch a user-provided URL."""
+    if not isinstance(value, str) or not value.startswith("data:image/jpeg;base64,"):
+        raise ValueError("Reference must be an inline JPEG image")
+    data = value.split(",", 1)[1]
+    if len(data) > 1_850_000:
+        raise ValueError("Reference image too large")
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Malformed base64 reference image") from exc
+    if len(raw) > 1_350_000:
+        raise ValueError("Reference image too large")
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            if image.format != "JPEG" or image.width * image.height > 6_000_000:
+                raise ValueError("Unsupported reference image format or dimensions")
+            return ImageOps.exif_transpose(image).convert("RGB")
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise ValueError("Invalid reference image") from exc
+
+
+def reference_role_order(payload):
+    refs = payload.reference_images
+    if not isinstance(refs, dict) or set(refs) - {"identity", "scenery"} or len(refs) > 2:
+        raise ValueError("Unsupported reference roles")
+    return [(role, decode_private_reference(refs[role])) for role in ("identity", "scenery") if role in refs]
+
+
 def render(job_id, payload):
     global queue_depth
     try:
@@ -168,10 +201,19 @@ def render(job_id, payload):
             ImageDraw.Draw(image).text((20,20), "TEST MODE", fill="white")
         else:
             import torch
-            image = model(
-                prompt=payload.prompt, width=width, height=height,
-                num_inference_steps=4, guidance_scale=1.0
-            ).images[0]
+            references = reference_role_order(payload)
+            prompt = payload.prompt
+            if references:
+                labels = [f"Image {index} is the {role} reference" for index, (role, _) in enumerate(references, 1)]
+                prompt = (". ".join(labels) +
+                    ". Preserve the character's distinctive facial appearance when an identity reference is supplied. " +
+                    "Use the location and architectural details when a scenery reference is supplied. " + prompt)
+            args = {"prompt": prompt, "width": width, "height": height,
+                    "num_inference_steps": 4, "guidance_scale": 1.0}
+            if references:
+                images = [img for _, img in references]
+                args["image"] = images if len(images) > 1 else images[0]
+            image = model(**args).images[0]
         stream = io.BytesIO()
         image.save(stream, format="PNG")
         key = f"{PREFIX}/outputs/{payload.character.lower()}/{job_id}.png"
@@ -195,7 +237,11 @@ def create_job(payload: Job):
     if payload.character not in ("Aria", "Nicole") or payload.aspect_ratio not in SIZES:
         raise HTTPException(422, "Invalid character or aspect ratio")
     if payload.mode != "image" or payload.duration is not None or payload.reference_image_url:
-        raise HTTPException(422, "Phase one supports text-to-image only; reference and video coming later")
+        raise HTTPException(422, "GPU pilot supports only text-to-image or inline reference image editing")
+    try:
+        reference_role_order(payload)
+    except ValueError:
+        raise HTTPException(422, "Invalid private reference image: JPEG under 1.35 MB and 6 megapixels required")
     with lock:
         if queue_depth >= 2:
             raise HTTPException(429, "Queue full")

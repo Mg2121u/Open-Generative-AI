@@ -11,7 +11,7 @@ export async function POST(request) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   try {
     const body = await request.json();
-    const { provider, character, mode, model, prompt, referenceUrl, ratio, duration } = body;
+    const { provider, character, mode, model, prompt, referenceUrl, referenceImages, ratio, duration } = body;
     if (!["Aria", "Nicole"].includes(character) || !["image", "video"].includes(mode) || typeof prompt !== "string" || prompt.length > 4000) {
       return NextResponse.json({ error: "Invalid character, mode or prompt." }, { status: 400 });
     }
@@ -21,7 +21,17 @@ export async function POST(request) {
     if (mode === "video" && provider === "gpu") return NextResponse.json({ error: "GPU video generation is not enabled in pilot." }, { status: 422 });
     if (mode === "video" && model !== VIDEO_MODEL) return NextResponse.json({ error: "Unsupported video model." }, { status: 400 });
     if (mode === "video" && !validExternalImage(referenceUrl)) return NextResponse.json({ error: "An HTTPS start-frame URL is required." }, { status: 400 });
-    if (referenceUrl && !validExternalImage(referenceUrl)) return NextResponse.json({ error: "Reference image URL must be a public HTTPS URL without credentials." }, { status: 400 });
+    if (referenceUrl && provider === "fal" && !validExternalImage(referenceUrl)) return NextResponse.json({ error: "Reference image URL must be a public HTTPS URL without credentials." }, { status: 400 });
+    const privateRefs = referenceImages || {};
+    if (typeof privateRefs !== "object" || Array.isArray(privateRefs) || !privateRefs ||
+        Object.keys(privateRefs).length > 2 || Object.keys(privateRefs).some((key) => !["identity", "scenery"].includes(key)) ||
+        Object.values(privateRefs).some((value) => typeof value !== "string" ||
+            !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(value) || value.length > 1_850_000)) {
+      return NextResponse.json({ error: "Invalid reference upload. Use up to two compact JPEG images." }, { status: 422 });
+    }
+    if (provider === "fal" && Object.keys(privateRefs).length) {
+      return NextResponse.json({ error: "Private reference uploads are available on the independent GPU only." }, { status: 422 });
+    }
     const ratios = { portrait_16_9: "9:16", square_hd: "1:1", landscape_16_9: "16:9" };
     if (!(ratio in ratios)) return NextResponse.json({ error: "Invalid aspect ratio." }, { status: 400 });
     if (mode === "video" && ![5, 10, 15].includes(duration)) return NextResponse.json({ error: "Unsupported duration." }, { status: 400 });
@@ -41,7 +51,7 @@ export async function POST(request) {
     }
     const result = await fetch(endpoint.replace(/\/$/, "") + "/jobs", {
       method: "POST", headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
-      body: JSON.stringify({ character, mode, prompt, reference_image_url: referenceUrl || null, aspect_ratio: ratios[ratio], duration: mode === "video" ? duration : undefined }),
+      body: JSON.stringify({ character, mode, prompt, reference_image_url: null, reference_images: privateRefs, aspect_ratio: ratios[ratio], duration: mode === "video" ? duration : undefined }),
       cache: "no-store", signal: AbortSignal.timeout(22000)
     });
     const data = await result.json().catch(() => ({}));

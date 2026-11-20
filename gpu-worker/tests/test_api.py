@@ -95,3 +95,38 @@ def test_canonical_salad_env_name_preferred(monkeypatch):
     applied = worker.normalize_salad_environment()
     assert "STORAGE_DRIVER" not in applied
     assert os.environ["STORAGE_DRIVER"] == "ephemeral"
+
+def test_inline_reference_validation():
+    from PIL import Image
+    import base64
+    img = Image.new("RGB", (48, 48), (200, 160, 130))
+    dest = io.BytesIO()
+    img.save(dest, format="JPEG")
+    encoded = "data:image/jpeg;base64," + base64.b64encode(dest.getvalue()).decode()
+    reference = worker.decode_private_reference(encoded)
+    assert reference.size == (48, 48)
+    assert worker.reference_role_order(worker.Job(character="Nicole", prompt="Portrait", reference_images={"identity": encoded}))[0][0] == "identity"
+    with TestClient(worker.app) as client:
+        headers = {"Authorization": "Bearer a_test_token_longer_than_32_bytes_123456"}
+        worker.ready.set()
+        worker.s3 = FakeS3()
+        worker.model = "mock"
+        payload = {"character": "Nicole", "prompt": "Casual portrait", "reference_images": {"identity": encoded}}
+        assert client.post("/jobs", headers=headers, json=payload).status_code == 202
+        bad = {**payload, "reference_images": {"identity": "http://127.0.0.1/private"}}
+        assert client.post("/jobs", headers=headers, json=bad).status_code == 422
+        bad["reference_images"] = {"unknown": encoded}
+        assert client.post("/jobs", headers=headers, json=bad).status_code == 422
+        bad["reference_images"] = {"identity": "data:image/jpeg;base64," + "A" * 1_850_001}
+        assert client.post("/jobs", headers=headers, json=bad).status_code == 422
+
+
+def test_reference_roles_order_independent_of_client_dict_order():
+    from PIL import Image
+    import base64
+    image = Image.new("RGB", (8, 8), "white")
+    stream = io.BytesIO()
+    image.save(stream, format="JPEG")
+    encoded = "data:image/jpeg;base64," + base64.b64encode(stream.getvalue()).decode()
+    payload = worker.Job(character="Aria", prompt="A portrait", reference_images={"scenery": encoded, "identity": encoded})
+    assert [role for role, _ in worker.reference_role_order(payload)] == ["identity", "scenery"]

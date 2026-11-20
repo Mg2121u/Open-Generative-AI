@@ -38,3 +38,6 @@ A worker must secure all asset URLs, validate rights and age, enforce local law 
 3. Test a single low-cost, permitted generation on fal after explicit spending approval.
 4. Obtain written confirmation from a GPU host permitting the intended lawful workload, then deploy a compatible model/worker.
 5. Persist jobs and asset history; add a hard monthly spend cap and one active job per character.
+
+## Private reference-photo pilot (feature branch, not yet GPU verified)
+Reference-guided FLUX.2 Klein 4B editing supports up to **two** browser-provided references: `identity` and `scenery`. Images are resized client-side to no more than 1024px on their longer edge and compressed to JPEG; the API accepts only base64 inline JPEGs with size limits. The server forwards them over HTTPS inside the authenticated GPU request; **no public storage URL is created** and no references are written to the job record. For processing, the worker decodes them in memory and supplies them as image-conditioning inputs to `Flux2KleinPipeline`. Neither identical facial appearance nor scene exactness is guaranteed; those require separate visual QA. This does not add video support or Telegram integration. Browser-session references are not persistent. Vercel's overall request body limits still apply. All existing owner and worker tokens remain untouched.
