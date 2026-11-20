@@ -94,7 +94,7 @@ def process_message(message):
     if not ALLOWED_USERS or int(owner) not in ALLOWED_USERS:
         say(chat,'This app is private. Send /id to retrieve your ID for access.'); return
     if cmd in ('/start','/help'):
-        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description> or photo with caption /scenery or reply /scenery to photo\n/scenery — arm the NEXT photo as a scenery reference\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept mismatched face and deliver, no Wan cost\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
+        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description> or photo with caption /scenery or reply /scenery to photo\n/scenery — arm the NEXT photo as a scenery reference\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept mismatched face and deliver, no Wan cost\n/fix_scenery JOB8 — local preview replacing bad AI-blended background, NO WAN COST\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
         return
     if cmd=='/new':
         job=db.create_draft(chat,owner)
@@ -108,6 +108,21 @@ def process_message(message):
                   'scenery and outfit are reused. The old result stays untouched. '
                   'No new AI charges yet. Use /fullplan to see the updated plan, '
                   'or /generate to authorize the new paid Wan 480p run.')
+        return
+    if cmd=='/fix_scenery':
+        try:
+            result=db.create_scene_fix(chat,owner,value.strip())
+            say(chat,(
+                f'Scenery repair preview {result["job_id"][:8]} '
+                f'{"already queued" if result["already_queued"] else "queued"} '
+                f'from completed video {result["from_job"][:8]}. '
+                'This is LOCAL human matting + exact scene photo compositing, '
+                'not another Wan generation. Original video/audio stay saved. '
+                'No paid AI charge. The result is a preview: inspect body edges '
+                'and lighting before treating it as final. /status shows progress.'
+            ))
+        except (ValueError,TypeError,KeyError) as exc:
+            say(chat,'Scenery repair cannot start: '+str(exc)[:350])
         return
     if cmd in ('/review_qa','/approve_qa'):
         from . import full_video
@@ -197,6 +212,12 @@ def process_message(message):
         return
     job=db.latest_job(owner)
     if cmd=='/confirm_segment':
+        if job and ((job.get('checkpoint') or {}).get('scenery_reference') or {}).get('status')=='ready':
+            say(chat,'Paid single-section generation with a scenery PHOTO is '
+                'paused to prevent another blended-background charge. '
+                'Use /fix_scenery on an existing COMPLETED parent video '
+                'for a no-Wan-cost local composite preview.')
+            return
         if job and ((job.get('checkpoint') or {}).get('scenery_reference') or {}).get('status') in ('awaiting','pending','failed'):
             say(chat,'Scenery image is not archived yet. Finish sending /scenery photo and confirm it is ready in /status before paying.')
             return
@@ -361,6 +382,17 @@ def process_message(message):
             say(chat, 'Full-video plan unavailable: '+str(exc)[:350])
         return
     if cmd=='/generate':
+        # The old 3-image generative scenery approach visibly blended the
+        # identity-photo bedroom into a terrace; never spend again until
+        # the deterministic local matte has been visually approved.
+        if (((job.get('checkpoint') or {}).get('scenery_reference') or {}).get('status')=='ready'):
+            say(chat,'Paid generation with a scenery PHOTO is temporarily '
+                'paused because the last Wan output blended the old indoor '
+                'background into your new scenery. To repair an already-paid '
+                'completed video at no AI cost, send /fix_scenery JOB8. '
+                'You can still use a TEXT description with /scenery TEXT '
+                'to clear the image reference.')
+            return
         if (((job.get('checkpoint') or {}).get('scenery_reference') or {}).get('status')
                 in ('awaiting','pending','failed')):
             say(chat,'Scenery photo must finish archiving before paid generation. '
