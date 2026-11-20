@@ -83,7 +83,37 @@ def fixed_seed(job):
     return int.from_bytes(digest[:4], 'big') % 2147483648
 
 
-def scene_instruction(job):
+def scene_reference(job):
+    """Scenery pictures are NEVER person/identity references."""
+    return ((job.get('checkpoint') or {}).get('scenery_reference') or {})
+
+
+def scene_instruction(job, *, scene_image_number=None):
+    reference=scene_reference(job)
+    status=reference.get('status')
+    if status in ('awaiting','pending','failed'):
+        raise ValueError('Scenery reference photo is not ready; finish image upload before generation')
+    if status=='ready':
+        if not reference.get('scenery_image_key') or scene_image_number not in (2,3):
+            raise ValueError('Scenery image must be submitted in a separate reference slot')
+        requested=_clean(reference.get('description'))
+        more=(f' Additional environment details: {requested}. ' if requested else '')
+        return (
+            f'SCENERY REFERENCE: Image {scene_image_number} is the OWNER UPLOADED '
+            'SCENERY PHOTO, and is the authoritative reference for the '
+            'BACKGROUND/LOCATION ONLY: match its setting, architecture, layout, '
+            'furniture, ground, lighting, perspective, materials and colors. '
+            'Replace the setting from Video 1 completely, with the uploaded '
+            'location consistent across every frame. '
+            'Any people or faces in the scenery photo are irrelevant: never '
+            'copy or blend their face, body, hairstyle or outfit onto Nicole. '
+            'Image 1 alone defines Nicole and her appearance; the reference '
+            'face close-up (when present) only reinforces her face. '
+            'Video 1 supplies the choreography, body movements and camera timing '
+            'but NOT its original scenery. Never add the reference photo as a '
+            'visible flat overlay, frame, cutout or picture-in-picture. '
+            + more
+        )
     requested = _clean(job.get('scenery'))
     if requested.lower() in SOURCE_SCENE:
         return (
@@ -121,7 +151,7 @@ def outfit_instruction(job):
     )
 
 
-def build_prompt(job, *, chained=False):
+def build_prompt(job, *, chained=False, scene_image_number=None, face_anchor_present=True):
     motion = (
         'VIDEO 1 IS THE MOTION AND CAMERA TIMING AUTHORITY. Reproduce the source '
         'choreography pose by pose, including hand movements, steps, limb trajectories, '
@@ -145,12 +175,14 @@ def build_prompt(job, *, chained=False):
         'controls the location. Continue the physical dance without resetting, '
         'teleporting or morphing between poses. '
     ) if chained else (
-        'IMAGE 2 is a close-up crop of NICOLE FROM IMAGE 1, not another woman. '
-        'Its sole purpose is to reinforce her exact facial identity: same eyes, '
-        'eyelids, nose bridge, lips, cheeks, jaw, facial proportions, skin texture '
-        'and hairline in every frame. Image 1 controls body, hair, outfit and '
-        'full-body appearance. NEVER substitute the face from Video 1. '
-        'NO previous generated frame is supplied. Start at the opening pose '
+        ('IMAGE 2 is a close-up crop of NICOLE FROM IMAGE 1, not another woman. '
+         'Its sole purpose is to reinforce her exact facial identity: same eyes, '
+         'eyelids, nose bridge, lips, cheeks, jaw, facial proportions, skin texture '
+         'and hairline in every frame. Image 1 controls body, hair, outfit and '
+         'full-body appearance. NEVER substitute the face from Video 1. '
+         if face_anchor_present else
+         'Only Image 1 is used for Nicole identity; no facial close-up was provided. ')
+        + 'NO previous generated frame is supplied. Start at the opening pose '
         'of the current Video 1 motion interval, using original Nicole in Image 1. '
         'Maintain her exact proportions and wardrobe across the entire clip. '
     )
@@ -172,6 +204,6 @@ def build_prompt(job, *, chained=False):
         'Generate NO new audio.'
     )
     extra = _clean(job.get('instructions'), 380)
-    return (identity + motion + scene_instruction(job) + outfit_instruction(job)
+    return (identity + motion + scene_instruction(job,scene_image_number=scene_image_number) + outfit_instruction(job)
             + continuity + stability
             + (f' Additional owner directions: {extra}.' if extra else ''))
