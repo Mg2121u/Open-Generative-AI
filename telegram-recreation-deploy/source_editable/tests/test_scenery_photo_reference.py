@@ -44,7 +44,7 @@ def test_scene_is_never_an_identity_reference_in_prompt():
     assert 'never copy or blend their face' in prompt
     assert 'Video 1 supplies the choreography' in prompt
     assert 'warm evening garden' in prompt
-    with pytest.raises(ValueError,match='scenery image'):
+    with pytest.raises(ValueError,match='Scenery image'):
         quality.build_prompt(job,scene_image_number=None)
 
 
