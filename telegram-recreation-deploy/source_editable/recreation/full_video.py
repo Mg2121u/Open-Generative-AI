@@ -553,7 +553,9 @@ def _run_segments(job,info,*,guard):
             else:
                 scene_ok=True
             if not (identity_ok and continuity_ok and scene_ok):
-                raise provider.NeedsReview('Saved Wan request does not match Nicole body, face, uploaded-scene and source-motion reference roles')
+                if scenery_key:
+                    raise provider.NeedsReview('Saved Wan request does not match Nicole body, face, uploaded-scene and source-motion reference roles')
+                raise provider.NeedsReview('Submitted segment lacks verified Nicole identity or expected chained-frame continuity inputs')
         if step['state'] in ('SUBMITTING','UNCERTAIN','FAILED'):
             raise provider.NeedsReview('Uncertain provider request; manual reconciliation required')
         if step['state']!='COMPLETED':
