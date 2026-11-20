@@ -212,3 +212,92 @@ def test_ingest_updates_only_scene_status(monkeypatch):
     assert scenery_ingest_once.ingest_scenery(j['job_id'])
     assert approved[0][-1]=='private/scenery/scene.jpg'
     assert 'No paid AI call' in messages[-1][1]
+
+
+def test_generate_accepts_ready_scenery_photo_after_approval(monkeypatch):
+    job=staged_scene(stage='UPLOAD_REFERENCE',state='DRAFT')
+    monkeypatch.setattr(telegram,'ALLOWED_USERS',{123})
+    monkeypatch.setenv('ENABLE_PAID_GENERATION','true')
+    monkeypatch.setattr(telegram.db,'latest_job',lambda owner:job)
+    authorized=[]
+    monkeypatch.setattr(telegram.db,'queue_job',lambda jid,owner:authorized.append((jid,owner)) or {'job_id':jid})
+    notices=[]
+    monkeypatch.setattr(telegram,'say',lambda chat,msg:notices.append(msg))
+    telegram.process_message({'chat':{'id':123},'from':{'id':123},'text':'/generate'})
+    assert authorized==[(job['job_id'],123)]
+    assert 'Image 1 Nicole identity and outfit' in notices[-1]
+    assert 'Image 3 uploaded scenery' in notices[-1]
+    assert 'Video 1 choreography' in notices[-1]
+
+
+def test_confirm_segment_accepts_ready_scenery_photo(monkeypatch):
+    job=staged_scene(stage='SEGMENT_REDO',state='DRAFT')
+    monkeypatch.setattr(telegram,'ALLOWED_USERS',{123})
+    monkeypatch.setenv('ENABLE_PAID_GENERATION','true')
+    monkeypatch.setattr(telegram.db,'latest_job',lambda owner:job)
+    submitted=[]
+    monkeypatch.setattr(telegram.db,'queue_segment_revision',
+                        lambda jid,owner:submitted.append(jid) or True)
+    message=[]
+    monkeypatch.setattr(telegram,'say',lambda chat,txt:message.append(txt))
+    telegram.process_message({'chat':{'id':123},'from':{'id':123},
+                              'text':'/confirm_segment'})
+    assert submitted==[job['job_id']]
+    assert 'ONE new Wan section' in message[-1]
+
+
+def test_old_greenscreen_command_is_retired_without_queuing(monkeypatch):
+    monkeypatch.setattr(telegram,'ALLOWED_USERS',{123})
+    monkeypatch.setattr(telegram.db,'create_scene_fix',
+                        lambda *args:pytest.fail('No green-screen jobs may be created'),
+                        raising=False)
+    messages=[]
+    monkeypatch.setattr(telegram,'say',lambda chat,msg:messages.append(msg))
+    telegram.process_message({'chat':{'id':123},'from':{'id':123},
+                              'text':'/fix_scenery 996bca83'})
+    assert 'retired' in messages[-1]
+    assert 'did not start a render' in messages[-1]
+
+
+def test_later_segment_receives_full_three_photo_contract_without_frame_chaining(monkeypatch):
+    job=staged_scene()
+    job['segment_total']=2
+    monkeypatch.setenv('RECREATION_QUALITY_MODE','identity_lock')
+    monkeypatch.setenv('RECREATION_IDENTITY_ANCHOR','canonical')
+    monkeypatch.setenv('RECREATION_FACE_QA_MODE','off')
+    segs=[
+        {'index':0,'start':0,'duration':8,'output_seconds':8,'estimated_usd':.8,'reused':False},
+        {'index':1,'start':8,'duration':8,'output_seconds':8,'estimated_usd':.8,'reused':False}
+    ]
+    monkeypatch.setattr(full_video,'_guard_auto',lambda *_:{'segments':segs})
+    monkeypatch.setattr(full_video.db,'get_job',lambda *_:job)
+    monkeypatch.setattr(full_video.db,'get_step',lambda *_:None)
+    monkeypatch.setattr(full_video,'_stored',lambda key:key in (
+        'private/scenery.jpg',full_video.segment_key(job['job_id'],0)))
+    monkeypatch.setattr(full_video.identity_qa,'check_archived',lambda *a,**kw:{'status':'disabled'})
+    monkeypatch.setattr(full_video.identity_qa,'prepare_anchor',
+        lambda *_:f'recreation/{job["job_id"]}/identity/nicole_face_closeup_v1.jpg')
+    monkeypatch.setattr(full_video,'_prepare_continuity_frame',
+        lambda *args:pytest.fail('No generated-face chaining permitted for scene photos'))
+    monkeypatch.setattr(full_video,'_prepare_reference',
+        lambda job,seg:full_video.source_key(job['job_id'],seg['index']))
+    monkeypatch.setattr(full_video.storage,'presign',
+        lambda key,ttl:'https://test-private.example/'+key)
+    sent=[]
+    monkeypatch.setattr(full_video.provider,'submit_once',
+        lambda jid,key,model,payload:sent.append((key,payload)) or {
+            'state':'SUBMITTED','external_request_id':'not-billable',
+            'input':{'payload':payload}})
+    monkeypatch.setattr(full_video.provider,'poll',lambda *_:{'status':'processing'})
+    assert full_video.run_auto(job)=='processing'
+    assert len(sent)==1
+    assert sent[0][0]==full_video.step_key(1)
+    payload=sent[0][1]
+    assert len(payload['reference_images'])==3
+    assert payload['reference_images'][0].endswith('/private/nicole.jpg')
+    assert payload['reference_images'][1].endswith('/identity/nicole_face_closeup_v1.jpg')
+    assert payload['reference_images'][2].endswith('/private/scenery.jpg')
+    assert payload['reference_videos']==[
+        'https://test-private.example/'+full_video.source_key(job['job_id'],1)]
+    assert 'Never inherit the background from either Nicole image or Video 1' in payload['prompt']
+    assert payload['generate_audio'] is False
