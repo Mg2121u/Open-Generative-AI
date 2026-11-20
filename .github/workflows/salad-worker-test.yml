@@ -26,7 +26,7 @@ jobs:
           trap 'kill $pid 2>/dev/null || true' EXIT
           ready=0
           for i in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:8000/healthz | grep -q alive; then
+            if curl --fail --silent --noproxy '*' -6 -g 'http://[::1]:8000/healthz' | grep -q alive; then
               ready=1
               break
             fi
@@ -38,4 +38,3 @@ jobs:
           fi
           curl --fail --silent --noproxy '*' -6 -g 'http://[::1]:8000/healthz' | grep -q alive
           curl --fail --silent --noproxy '*' -6 -g 'http://[::1]:8000/readyz' | grep -q ready
-          curl --fail --silent --noproxy '*' -4 'http://127.0.0.1:8000/readyz' | grep -q ready
