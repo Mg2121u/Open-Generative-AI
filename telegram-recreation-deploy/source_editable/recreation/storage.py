@@ -66,6 +66,24 @@ def upload_key(key,path,mime='video/mp4'):
     return key
 
 
+
+def final_video_max_bytes():
+    """Bound only the FINAL assembled MP4 (source and paid clips untouched).
+
+    The S3-compatible backend may enforce a 50 MB per-object cap even when
+    multipart upload is available. Allow workspace operators to raise it
+    after confirming their own storage policy, without committing credentials.
+    """
+    raw=os.getenv('RECREATION_FINAL_S3_MAX_MB','44').strip()
+    try:
+        mb=float(raw)
+    except (TypeError,ValueError):
+        raise RuntimeError('Invalid final video storage limit configuration') from None
+    if not 12<=mb<=2000:
+        raise RuntimeError('Final video storage limit must be between 12 and 2000 MB')
+    return int(mb*1_000_000)
+
+
 def store_provider_url(url, key, *, max_bytes=250_000_000):
     """Persist a generated provider video before its signed URL expires."""
     from urllib.parse import urlsplit
