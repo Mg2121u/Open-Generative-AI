@@ -6,7 +6,7 @@ are reserved in recreation_steps, preventing duplicate charges after restart.
 import logging
 import tempfile
 from pathlib import Path
-from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision,qa_owner_approval
+from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision,qa_owner_approval,final_archive_recovery
 
 LOG=logging.getLogger('app-queue')
 
@@ -66,6 +66,20 @@ def process(job):
             telegram.say(job['chat_id'],f'Nicole generation started. {len(plan["segments"])} segments, '
                 f'estimated additional WaveSpeed charge ${plan["remaining_estimate_usd"]:.2f} '
                 '(actual provider billing may vary). Original audio will be preserved. /status tracks progress.')
+        return
+    if stage=='FINAL_ASSEMBLE':
+        # All 27 Wan requests are already complete and immutable. This
+        # route ONLY joins archived sections, exports a size-bounded MP4,
+        # restores source audio and sends the existing result.
+        result=final_archive_recovery.run(job)
+        if result!='completed':
+            raise RuntimeError('Unexpected local-only archive recovery outcome')
+        done=_next(job,stage='DONE',state='COMPLETED',
+                   current_segment=job['segment_total'],
+                   event=('final_archive_recovered',
+                          'Saved video delivered, using original paid sections with no new Wan generation'))
+        if done:
+            LOG.info('FINAL_ASSEMBLE job=%s completed=true paid_generation_calls=0',job_id[:8])
         return
     if stage=='SALVAGE':
         # Salvage is local remux only; NEVER invoke the Wan run_auto path.
