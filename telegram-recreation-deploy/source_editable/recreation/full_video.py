@@ -115,6 +115,12 @@ def report(job):
     if not (240 <= source['width'] <= 4096 and 240 <= source['height'] <= 4096):
         raise ValueError('Unsupported source dimensions')
     quality_mode=quality.enabled(job)
+    scenery_ref=quality.scene_reference(job)
+    if scenery_ref.get('status') in ('awaiting','pending','failed'):
+        raise ValueError('Scenery reference image is not ready; finish /scenery upload first')
+    if scenery_ref.get('status')=='ready':
+        if not quality_mode or not scenery_ref.get('scenery_image_key'):
+            raise ValueError('Scenery image reference requires identity-lock generation mode')
     segments=(quality.quality_plan(source['duration']) if quality_mode
               else plan(source['duration'],reuse_first=_reusable_canary(job)))
     return {'source_duration':source['duration'],'segments':segments,'remaining_estimate_usd':estimate(segments),
@@ -474,15 +480,32 @@ def _run_segments(job,info,*,guard):
                 payload=wan_canary.payload_for(reference,source_media['width'],source_media['height'],[image])
                 payload['prompt']+=' Opening segment: establish Nicole from Image 1; follow Video 1 motion only.'
             if quality.enabled(job):
-                # Give Wan TWO views of the ORIGINAL Nicole, never a previously
-                # generated face. Prepare before the paid provider reservation.
+                # Slot 1: Nicole original. Slot 2: her original facial crop.
+                # Optional last slot: SCENERY ONLY. No prior generated face.
+                has_face_anchor=False
                 if not last_key and os.getenv('RECREATION_FACE_QA_MODE','on').lower()!='off':
                     face_anchor=identity_qa.prepare_anchor(job)
                     payload['reference_images'].append(storage.presign(face_anchor,3600))
-                # Explicitly honor the owner's scenery and outfit instead of
-                # the legacy prompt, which unintentionally kept Video 1 scenery.
-                payload['prompt']=quality.build_prompt(job,chained=bool(last_key))
+                    has_face_anchor=True
+                scene=quality.scene_reference(job)
+                scene_number=None
+                if scene.get('status')=='ready':
+                    scene_key=scene['scenery_image_key']
+                    if not _stored(scene_key):
+                        raise provider.NeedsReview('Scenery photo is not archived; paid request blocked')
+                    if len(payload['reference_images'])>=3:
+                        raise provider.NeedsReview('Model image slot limit reached; paid request blocked')
+                    scene_number=len(payload['reference_images'])+1
+                    payload['reference_images'].append(storage.presign(scene_key,3600))
+                elif scene.get('status') in ('awaiting','pending','failed'):
+                    raise provider.NeedsReview('Scenery photo not ready; paid request blocked')
+                # Enforce explicit separation of character and location.
+                payload['prompt']=quality.build_prompt(
+                    job,chained=bool(last_key),scene_image_number=scene_number,
+                    face_anchor_present=has_face_anchor)
                 payload['seed']=quality.fixed_seed(job)
+            elif quality.scene_reference(job).get('status')=='ready':
+                raise provider.NeedsReview('Image-based scenery requires identity-lock mode')
             payload['duration']=seg['output_seconds']
             LOGGER.info('FULL_VIDEO submitting_segment=%d estimate_usd=%.2f',idx,seg['estimated_usd'])
             step=provider.submit_once(job_id,step_key(idx),wan_canary.MODEL,payload)
@@ -497,10 +520,14 @@ def _run_segments(job,info,*,guard):
             current_identity=(job.get('checkpoint') or {}).get('identity',{}).get('nicole_image_key')
             identity_ok=bool(refs and current_identity and current_identity in unquote(urlsplit(refs[0]).path))
             reset=quality.reset_identity_each_segment(job)
-            continuity_ok=((len(refs) in (1,2) and (idx==0 or reset)) or
+            continuity_ok=((len(refs) in (1,2,3) and (idx==0 or reset)) or
                            (not reset and idx>0 and len(refs)>=2 and
                             expected in unquote(urlsplit(refs[1]).path)))
-            if not (identity_ok and continuity_ok):
+            scene=quality.scene_reference(job)
+            scenery_key=scene.get('scenery_image_key') if scene.get('status')=='ready' else None
+            scene_ok=(not scenery_key or bool(
+                len(refs)>=2 and scenery_key in unquote(urlsplit(refs[-1]).path)))
+            if not (identity_ok and continuity_ok and scene_ok):
                 raise provider.NeedsReview('Submitted segment lacks verified Nicole identity or expected chained-frame continuity inputs')
         if step['state'] in ('SUBMITTING','UNCERTAIN','FAILED'):
             raise provider.NeedsReview('Uncertain provider request; manual reconciliation required')
