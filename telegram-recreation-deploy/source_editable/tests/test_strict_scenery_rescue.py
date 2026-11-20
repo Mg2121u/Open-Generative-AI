@@ -66,7 +66,7 @@ def test_scene_rescue_queue_only_uses_owned_finished_job(monkeypatch):
     assert "'SCENE_FIX','QUEUED'" in history[-1][0]
     assert history[-1][1][-1].obj['scene_repair']['parent_job_id']==PARENT_ID
     assert history[-1][1][-1].obj['scenery_reference']['scenery_image_key']=='refs/terrace.jpg'
-    assert all('provider' not in sql.lower() for sql,_ in history)
+    assert len(history)==3  # read parent, check duplicate, insert local job
     with pytest.raises(ValueError):
         db.create_scene_fix(123,123,'1; DROP TABLE x')
 
@@ -75,7 +75,8 @@ def test_scenery_fix_is_never_billed_and_parent_unchanged(monkeypatch):
     job=derived()
     p=parent()
     monkeypatch.setattr(db,'get_job',lambda id,owner_id:p)
-    monkeypatch.setattr(full_video,'_stored',lambda *_:True)
+    monkeypatch.setattr(full_video,'_stored',lambda key:key in (
+        full_video.final_key(PARENT_ID),'refs/terrace.jpg'))
     calls=[]
     monkeypatch.setattr(scenery_repair.storage,'download_key',
                         lambda key,path:Path(path).write_bytes(b'private contents'))
