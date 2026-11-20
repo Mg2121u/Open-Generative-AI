@@ -561,7 +561,8 @@ def queue_archive_delivery(owner_id,job_prefix):
               AND j.character='NICOLE'
               AND j.stage='AUTO_GENERATE' AND j.state='NEEDS_REVIEW'
               AND (j.lease_until IS NULL OR j.lease_until<now())
-              AND j.last_error='Final file archived, but Telegram delivery needs manual inspection'
+              AND (j.last_error='Final file archived, but Telegram delivery needs manual inspection'
+                OR j.last_error='Uncertain provider submission '||%s::text||'; check provider dashboard to avoid duplicate billing')
               AND j.segment_total>0 AND j.original_key IS NOT NULL
               AND j.checkpoint#>>'{local_preflight,source_key}'=j.original_key
               AND j.checkpoint#>>'{identity,status}'='ready'
@@ -578,7 +579,7 @@ def queue_archive_delivery(owner_id,job_prefix):
                   WHERE s.job_id=j.job_id AND s.step_key LIKE %s
                     AND s.state!='COMPLETED')
             RETURNING j.*""",
-            (owner_id,prefix,original,retry,pattern,pattern)).fetchone()
+            (owner_id,prefix,original,original,retry,pattern,pattern)).fetchone()
 
 
 def queue_final_assembly(owner_id, job_prefix):
@@ -757,7 +758,7 @@ def review_uncertain_submissions(age_seconds=180):
     """Watchdog: mark ambiguous paid requests for manual reconciliation, never resubmit."""
     with connect() as conn:
         rows=conn.execute('''UPDATE recreation_steps SET state='UNCERTAIN',updated_at=now()
-            WHERE state='SUBMITTING' AND updated_at < now()-make_interval(secs=>%s)
+            WHERE state='SUBMITTING' AND provider!='telegram' AND updated_at < now()-make_interval(secs=>%s)
             RETURNING job_id,step_key''',(age_seconds,)).fetchall()
         for row in rows:
             conn.execute('''UPDATE recreation_jobs SET state='NEEDS_REVIEW',last_error=%s,lease_until=NULL,lease_owner=NULL,updated_at=now()
