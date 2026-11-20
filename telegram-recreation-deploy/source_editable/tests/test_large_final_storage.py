@@ -163,3 +163,30 @@ def test_finish_command_does_not_allow_unauthorized_fan(monkeypatch):
     telegram.process_message({'from':{'id':999},'chat':{'id':999},
                               'text':'/finish 32e09922'})
     assert 'private' in messages[-1].lower()
+
+
+def test_automatic_recovery_only_for_terminal_full_archive_once(monkeypatch):
+    monkeypatch.setenv('ALLOWED_TELEGRAM_USER_IDS','123')
+    statements=[]
+    class Conn:
+        def __enter__(self):return self
+        def __exit__(self,*a):return False
+        def execute(self,sql,params):
+            statements.append((sql,params))
+            return SimpleNamespace(fetchall=lambda:[
+               {'job_id':job()['job_id'],'segment_total':27}])
+    monkeypatch.setattr(db,'connect',lambda:Conn())
+    result=db.auto_recover_finished_uploads()
+    assert result[0]['segment_total']==27
+    sql,params=statements[0]
+    assert "stage='FINAL_ASSEMBLE'" in sql
+    assert "j.state IN ('FAILED','NEEDS_REVIEW')" in sql
+    assert 'j.lease_owner IS NULL' in sql
+    assert "s.state='COMPLETED'" in sql
+    assert "s.state!='COMPLETED'" in sql
+    assert 'auto_attempted' in sql
+    assert 'S3UploadFailedError' in sql
+    assert params[0]==[123]
+    monkeypatch.setenv('ALLOWED_TELEGRAM_USER_IDS','')
+    assert db.auto_recover_finished_uploads()==[]
+    assert len(statements)==1
