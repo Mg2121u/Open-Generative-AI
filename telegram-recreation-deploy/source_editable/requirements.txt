@@ -6,4 +6,3 @@ requests>=2.32,<3
 pytest>=8,<10
 Pillow>=11,<13
 opencv-python-headless>=4.10,<5
-onnxruntime>=1.23,<1.24
