@@ -448,6 +448,45 @@ def approve_qa_review(job_id, owner_id, *, expected_step):
             RETURNING j.*""",
             (owner_id,expected_step,job_id,owner_id,expected_step)).fetchone()
 
+
+def queue_final_assembly(owner_id, job_prefix):
+    """Owner-only local recovery after all paid Wan sections completed.
+
+    This stage has no generation path, and does not alter ANY provider
+    request or user-approved face-QA exceptions. An active worker lease
+    always wins to avoid simultaneous video-assembly/delivery attempts.
+    """
+    import re
+    from .full_video import RUN_KEY
+    prefix=str(job_prefix or '').lower()
+    if not re.fullmatch(r'[0-9a-f]{8}',prefix):
+        raise ValueError('Use /finish and the eight-character job ID from /status')
+    pattern=f'wan_{RUN_KEY}_segment_%'
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs AS j
+          SET stage='FINAL_ASSEMBLE',state='QUEUED',attempt=0,
+              next_attempt_at=now(),lease_owner=NULL,lease_until=NULL,
+              last_error=NULL,updated_at=now()
+          WHERE j.owner_id=%s AND left(j.job_id::text,8)=%s
+            AND j.character='NICOLE' AND j.stage='AUTO_GENERATE'
+            AND j.state IN ('FAILED','NEEDS_REVIEW','RUNNING','QUEUED','WAITING_PROVIDER')
+            AND (j.lease_until IS NULL OR j.lease_until<now())
+            AND (j.last_error LIKE 'Processing stage failed: S3UploadFailedError%%'
+                 OR j.last_error LIKE 'Final MP4%%')
+            AND j.segment_total>0 AND j.original_key IS NOT NULL
+            AND j.checkpoint#>>'{local_preflight,source_key}'=j.original_key
+            AND j.checkpoint#>>'{identity,status}'='ready'
+            AND (SELECT count(*) FROM recreation_steps s
+                 WHERE s.job_id=j.job_id AND s.step_key LIKE %s
+                   AND s.state='COMPLETED'
+                   AND NULLIF(s.external_request_id,'') IS NOT NULL)=j.segment_total
+            AND NOT EXISTS (SELECT 1 FROM recreation_steps s
+                 WHERE s.job_id=j.job_id AND s.step_key LIKE %s
+                   AND s.state!='COMPLETED')
+            RETURNING j.*""",
+          (owner_id,prefix,pattern,pattern)).fetchone()
+
+
 def queue_salvage(job_id, owner_id):
     """Owner-approved local-only assembly for the known v3 seam review.
 
@@ -650,7 +689,7 @@ def claim_app(worker,seconds=240):
     with connect() as conn:
         return conn.execute("""WITH selected AS (
             SELECT job_id FROM recreation_jobs WHERE owner_id=ANY(%s::bigint[])
-            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE','SEGMENT_REDO','QA_OWNER_APPROVED')
+            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE','SEGMENT_REDO','QA_OWNER_APPROVED','FINAL_ASSEMBLE')
             AND state IN ('QUEUED','RUNNING','WAITING_PROVIDER')
             AND next_attempt_at<=now()
             AND (lease_until IS NULL OR lease_until<now())
