@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "./studio.module.css";
 
 const characters = {
@@ -28,6 +28,7 @@ export default function CreatorStudioPage() {
   const [ratio, setRatio] = useState("portrait_16_9");
   const [duration, setDuration] = useState(5);
   const [job, setJob] = useState(null);
+  const gatewayDownSince = useRef(null);
   const [gallery, setGallery] = useState([]);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -48,7 +49,18 @@ export default function CreatorStudioPage() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to check job");
+      if (data.status === "RECOVERING") {
+        if (gatewayDownSince.current === null) gatewayDownSince.current = Date.now();
+        if (Date.now() - gatewayDownSince.current >= 120000) {
+          throw new Error("Salad has remained unavailable for two minutes. The job may have been interrupted. Check the container logs before any new generation.");
+        }
+        setError(data.error || "Reconnecting to Salad to check this job.");
+        setJob({ ...activeJob, status: "RECOVERING" });
+        return;
+      }
+      gatewayDownSince.current = null;
       if (data.status === "ERROR") throw new Error(data.error || "Generation failed");
+      setError("");
       setJob({ ...activeJob, status: data.status });
       if (data.status === "COMPLETED") {
         const urls = (data.assets || []).filter((url) => typeof url === "string" && url.startsWith("https://"));
@@ -62,8 +74,10 @@ export default function CreatorStudioPage() {
 
   useEffect(() => {
     if (!job || job.status === "COMPLETED" || job.status === "ERROR") return;
-    const timer = setInterval(() => poll(job), 4000);
-    return () => clearInterval(timer);
+    // Serial polling prevents overlapping long waits when Salad's gateway
+    // is degraded, and retries only the existing job status endpoint.
+    const timer = setTimeout(() => poll(job), 5000);
+    return () => clearTimeout(timer);
   }, [job, poll]);
 
   useEffect(() => {
@@ -115,6 +129,7 @@ export default function CreatorStudioPage() {
   async function generate(event) {
     event.preventDefault();
     setError("");
+    gatewayDownSince.current = null;
     if (!password) { setError("Enter the private studio access token."); return; }
     if (gpuUnavailable) { setError("Salad Qwen worker is not ready. Check its Container Logs before retrying."); return; }
     if (provider === "gpu" && mode === "image" && !identityData && !sceneryData) { setError("Qwen needs an identity or scenery reference image."); return; }
@@ -165,7 +180,8 @@ export default function CreatorStudioPage() {
             {provider === "gpu" && <p className={styles.notice} aria-live="polite">GPU status: {gpuStatus === null ? "Checking connection…" : gpuStatus.ready ? "Qwen Image Edit 2511 is ready" : gpuStatus.reachable && gpuStatus.engine === "not_qwen_worker" ? "Salad still runs the old Docker image; Qwen not installed yet" : gpuStatus.reachable ? "Qwen model is loading or failed; check Salad Container Logs" : "Offline or unreachable"}. Status refreshes automatically.</p>}
             {error && <p role="alert" className={styles.error}>{error}</p>}
             <button disabled={!!busy || gpuUnavailable || (provider === "gpu" && mode === "video")} className={styles.generate} type="submit">{busy ? "Generation in progress…" : "Generate " + (mode === "image" ? "image" : "video") + "  ✦"}</button>
-            {job && <p aria-live="polite" className={styles.jobStatus}>Latest job: {job.status === "COMPLETED" ? "Complete" : job.status === "IN_PROGRESS" ? "Rendering…" : job.status === "IN_QUEUE" ? "Queued…" : job.status === "ERROR" ? "Failed" : job.status}</p>}
+            {job && <p aria-live="polite" className={styles.jobStatus}>Latest job: {job.status === "COMPLETED" ? "Complete" : job.status === "IN_PROGRESS" ? "Rendering…" : job.status === "IN_QUEUE" ? "Queued…" : job.status === "RECOVERING" ? "Reconnecting to Salad — same job, no resubmission…" : job.status === "ERROR" ? "Failed or interrupted" : job.status}</p>}
+            {job?.status === "ERROR" && job?.provider === "gpu" && <button type="button" className={styles.readonly} onClick={() => { gatewayDownSince.current = null; setError(""); setJob({ ...job, status: "RECOVERING" }); }}>Recheck existing GPU job (no new generation)</button>}
           </form>
         </section>
         <section className={styles.output}>

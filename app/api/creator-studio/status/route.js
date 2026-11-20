@@ -33,9 +33,26 @@ export async function POST(request) {
       const token = process.env.PRIVATE_GPU_TOKEN;
       if (!endpoint || !token || !endpoint.startsWith("https://")) return NextResponse.json({ error: "GPU worker not configured." }, { status: 503 });
       if (typeof body.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.id)) return NextResponse.json({ error: "Invalid job ID." }, { status: 400 });
-      const response = await fetch(endpoint.replace(/\/$/, "") + "/jobs/" + encodeURIComponent(body.id), {
-        headers: { Authorization: "Bearer " + token }, cache: "no-store", signal: AbortSignal.timeout(22000)
-      });
+      // A 502/503/504 from Salad can mean a transient gateway failure, an
+      // instance preemption, or GPU worker restart during inference. Never
+      // submit a new billable job as part of status recovery.
+      let response;
+      try {
+        response = await fetch(endpoint.replace(/\/$/, "") + "/jobs/" + encodeURIComponent(body.id), {
+          headers: { Authorization: "Bearer " + token }, cache: "no-store", signal: AbortSignal.timeout(12000)
+        });
+      } catch {
+        return NextResponse.json({ status: "RECOVERING", error:
+          "Salad is unreachable during this job. Rechecking the existing job without submitting another generation." });
+      }
+      if ([502, 503, 504].includes(response.status)) {
+        return NextResponse.json({ status: "RECOVERING", error:
+          "Salad gateway temporarily unavailable (HTTP " + response.status + "). Checking the same job again; nothing has been resubmitted." });
+      }
+      if (response.status === 404) {
+        return NextResponse.json({ status: "ERROR", error:
+          "Salad cannot find this job. The worker may have restarted or been preempted; the temporary job record may be lost." });
+      }
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         const detail = typeof data.detail === "string" ? data.detail : typeof data.error === "string" ? data.error : "";

@@ -29,3 +29,6 @@ Server-side preview env vars: `STUDIO_ACCESS_TOKEN`, `PRIVATE_GPU_ENDPOINT`, `PR
 
 ## Security
 Short-lived image links and ephemeral storage mean generated images are not preserved across GPU restarts. This draft is not a paid media delivery system; persistent storage, retention policy, UI access restrictions and user consent/rights checks would be needed before commercial automation.
+
+## November 20, 2026 — Salad 502 during Qwen inference
+The live Studio returned `GPU job status unavailable (HTTP 502)` after an earlier healthy Qwen check. Subsequent Studio health checks reported Salad unreachable. This indicates the status request could not reach the worker, but does not establish whether the root cause was CUDA OOM, OS OOM, preemption, or a gateway interruption. The status endpoint now returns `RECOVERING` for transient 502/503/504 and transport failures, and reports the more actionable "job record lost" condition when the worker responds 404 (ephemeral storage). The Studio polls one status call at a time for up to 2 minutes, retains the original job ID, provides a manual recheck button after failure, and **never automatically requeues a paid generation**. Owner still needs current Salad Container Logs / System Events to identify the real crash cause. No production Telegram/Render settings, Salad secrets, or Qwen GPU Docker image were changed.\n
