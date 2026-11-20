@@ -23,6 +23,7 @@ export default function CreatorStudioPage() {
   const [identityData, setIdentityData] = useState("");
   const [sceneryData, setSceneryData] = useState("");
   const [referenceBusy, setReferenceBusy] = useState(false);
+  const [gpuStatus, setGpuStatus] = useState(null);
   const [ratio, setRatio] = useState("portrait_16_9");
   const [duration, setDuration] = useState(5);
   const [job, setJob] = useState(null);
@@ -30,6 +31,7 @@ export default function CreatorStudioPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const busy = submitting || referenceBusy || (job && !["COMPLETED", "ERROR"].includes(job.status));
+  const gpuUnavailable = provider === "gpu" && gpuStatus?.ready === false;
 
   useEffect(() => {
     if (mode === "video") setModel(provider === "gpu" ? "disabled" : "alibaba/wan-3.0/image-to-video");
@@ -62,6 +64,23 @@ export default function CreatorStudioPage() {
     const timer = setInterval(() => poll(job), 4000);
     return () => clearInterval(timer);
   }, [job, poll]);
+
+  useEffect(() => {
+    if (provider !== "gpu") { setGpuStatus(null); return; }
+    let active = true;
+    async function checkGpu() {
+      try {
+        const response = await fetch("/api/creator-studio/health", { cache: "no-store" });
+        const value = await response.json();
+        if (active) setGpuStatus(response.ok ? value : { reachable: false, ready: false });
+      } catch {
+        if (active) setGpuStatus({ reachable: false, ready: false });
+      }
+    }
+    checkGpu();
+    const timer = setInterval(checkGpu, 15000);
+    return () => { active = false; clearInterval(timer); };
+  }, [provider]);
 
   async function readPrivateReference(file, setter) {
     if (!file) { setter(""); return; }
@@ -96,6 +115,7 @@ export default function CreatorStudioPage() {
     event.preventDefault();
     setError("");
     if (!password) { setError("Enter the private studio access token."); return; }
+    if (gpuUnavailable) { setError("Salad worker is not ready. Check its Container Logs before retrying."); return; }
     if (mode === "video" && !referenceUrl.trim()) { setError("Video generation needs an HTTPS start-frame URL."); return; }
     setSubmitting(true);
     try {
@@ -139,8 +159,9 @@ export default function CreatorStudioPage() {
             </> : <div className={styles.field}><label>{mode === "video" ? "Start-frame HTTPS image URL (required)" : "Reference image URL (not enabled for this model)"}</label><input value={referenceUrl} onChange={(e) => setReferenceUrl(e.target.value)} type="url" placeholder="https://... image URL" /><div className={styles.helper}>{mode === "image" ? "Current fal image models are text-to-image only; this URL is ignored." : "Use a URL from storage you control. Avoid exposing private reference photos publicly."}</div></div>}
             <div className={styles.row2}><div className={styles.field}><label>{mode === "image" ? "Frame size" : "Aspect ratio"}</label><select value={ratio} onChange={(e) => setRatio(e.target.value)}>{mode === "image" ? <><option value="portrait_16_9">Portrait 9:16</option><option value="square_hd">Square HD</option><option value="landscape_16_9">Landscape 16:9</option></> : <><option value="portrait_16_9">Portrait 9:16</option><option value="square_hd">Square 1:1</option><option value="landscape_16_9">Landscape 16:9</option></>}</select></div><div className={styles.field}><label>{mode === "image" ? "Batch size" : "Clip duration"}</label>{mode === "image" ? <div className={styles.readonly}>1 image / request</div> : <select value={duration} onChange={(e) => setDuration(Number(e.target.value))}><option value={5}>5 seconds</option><option value={10}>10 seconds</option><option value={15}>15 seconds</option></select>}</div></div>
             {provider === "fal" ? <p className={styles.notice}>fal.ai content policies and model safeguards apply.</p> : <p className={styles.notice}>Salad pilot supports text-to-image and reference-guided edits (identity + scenery). Exact facial identity is not guaranteed, and GPU video is not enabled. References are sent to the GPU only when generating. Model and host policies apply.</p>}
+            {provider === "gpu" && <p className={styles.notice} aria-live="polite">GPU status: {gpuStatus === null ? "Checking connection…" : gpuStatus.ready ? "Ready for image generation" : gpuStatus.reachable ? "Online but model not ready; check Salad Container Logs" : "Offline or unreachable"}. Status refreshes automatically.</p>}
             {error && <p role="alert" className={styles.error}>{error}</p>}
-            <button disabled={!!busy || (provider === "gpu" && mode === "video")} className={styles.generate} type="submit">{busy ? "Generation in progress…" : "Generate " + (mode === "image" ? "image" : "video") + "  ✦"}</button>
+            <button disabled={!!busy || gpuUnavailable || (provider === "gpu" && mode === "video")} className={styles.generate} type="submit">{busy ? "Generation in progress…" : "Generate " + (mode === "image" ? "image" : "video") + "  ✦"}</button>
             {job && <p aria-live="polite" className={styles.jobStatus}>Latest job: {job.status === "COMPLETED" ? "Complete" : job.status === "IN_PROGRESS" ? "Rendering…" : job.status === "IN_QUEUE" ? "Queued…" : job.status === "ERROR" ? "Failed" : job.status}</p>}
           </form>
         </section>

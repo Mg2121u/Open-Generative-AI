@@ -37,7 +37,10 @@ export async function POST(request) {
         headers: { Authorization: "Bearer " + token }, cache: "no-store", signal: AbortSignal.timeout(22000)
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) return NextResponse.json({ error: String(data.error || "GPU status unavailable").slice(0, 300) }, { status: response.status });
+      if (!response.ok) {
+        const detail = typeof data.detail === "string" ? data.detail : typeof data.error === "string" ? data.error : "";
+        return NextResponse.json({ error: detail.slice(0, 240) || "GPU job status unavailable (HTTP " + response.status + ")." }, { status: response.status });
+      }
       const state = String(data.status || "IN_QUEUE").toUpperCase();
       return NextResponse.json({ status: state, assets: Array.isArray(data.assets) ? data.assets : [], error: data.error || null });
     }

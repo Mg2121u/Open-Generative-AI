@@ -49,13 +49,39 @@ export async function POST(request) {
     if (!endpoint || !token || !endpoint.startsWith("https://")) {
       return NextResponse.json({ error: "Independent GPU worker is not configured. Set PRIVATE_GPU_ENDPOINT and PRIVATE_GPU_TOKEN only after provider approval." }, { status: 503 });
     }
+    // Never submit a billable job to a machine whose model is still initializing
+    // or whose initialization failed.
+    let health;
+    try {
+      health = await fetch(endpoint.replace(/\/$/, "") + "/readyz", {
+        method: "GET", cache: "no-store", signal: AbortSignal.timeout(6000)
+      });
+    } catch {
+      return NextResponse.json({ error: "Salad worker is not reachable. Check whether its instance is running." }, { status: 503 });
+    }
+    if (health.status !== 200) {
+      return NextResponse.json({ error: health.status === 503
+        ? "Salad server is online, but FLUX model initialization is not complete or failed. Check the latest Salad Container Logs before generating."
+        : "Salad GPU is not ready (health status " + health.status + ")." }, { status: 503 });
+    }
     const result = await fetch(endpoint.replace(/\/$/, "") + "/jobs", {
       method: "POST", headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify({ character, mode, prompt, reference_image_url: null, reference_images: privateRefs, aspect_ratio: ratios[ratio], duration: mode === "video" ? duration : undefined }),
       cache: "no-store", signal: AbortSignal.timeout(22000)
     });
     const data = await result.json().catch(() => ({}));
-    if (!result.ok) return NextResponse.json({ error: String(data.error || "Private GPU rejected the request").slice(0, 300) }, { status: result.status });
+    if (!result.ok) {
+      const detail = typeof data.detail === "string" ? data.detail : typeof data.error === "string" ? data.error : "";
+      const safe = detail.slice(0, 240);
+      const message = result.status === 422 && /Phase one supports text-to-image only|reference and video coming later/i.test(safe)
+        ? "Salad is running the older text-to-image Docker version. Update the Salad container image to the reference-enabled version before generating."
+        : result.status === 401
+        ? "Salad rejected the worker credential (401). Verify its configured token matches PRIVATE_GPU_TOKEN."
+        : result.status === 503
+        ? "Salad GPU model or storage is not ready (503). Check the latest Container Logs."
+        : safe || "Private GPU rejected the request (HTTP " + result.status + ").";
+      return NextResponse.json({ error: message }, { status: result.status });
+    }
     if (typeof data.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(data.id)) return NextResponse.json({ error: "Invalid private GPU job identifier." }, { status: 502 });
     return NextResponse.json({ id: data.id, provider });
   } catch (error) {
