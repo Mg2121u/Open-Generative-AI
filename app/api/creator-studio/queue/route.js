@@ -11,7 +11,7 @@ export async function POST(request) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   try {
     const body = await request.json();
-    const { provider, character, mode, model, prompt, referenceUrl, referenceImages, ratio, duration } = body;
+    const { provider, character, mode, model, prompt, referenceUrl, referenceImages, placement, ratio, duration } = body;
     if (!["Aria", "Nicole"].includes(character) || !["image", "video"].includes(mode) || typeof prompt !== "string" || prompt.length > 4000) {
       return NextResponse.json({ error: "Invalid character, mode or prompt." }, { status: 400 });
     }
@@ -28,6 +28,10 @@ export async function POST(request) {
         Object.values(privateRefs).some((value) => typeof value !== "string" ||
             !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(value) || value.length > 1_850_000)) {
       return NextResponse.json({ error: "Invalid reference upload. Use up to two compact JPEG images." }, { status: 422 });
+    }
+    if (provider === "gpu" && placement !== undefined &&
+        !["foreground_floor", "rear_floor", "sofa_seated"].includes(placement)) {
+      return NextResponse.json({ error: "Unknown subject placement." }, { status: 422 });
     }
     if (provider === "fal" && Object.keys(privateRefs).length) {
       return NextResponse.json({ error: "Private reference uploads are available on the independent GPU only." }, { status: 422 });
@@ -66,7 +70,7 @@ export async function POST(request) {
     }
     const result = await fetch(endpoint.replace(/\/$/, "") + "/jobs", {
       method: "POST", headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
-      body: JSON.stringify({ character, mode, prompt, reference_image_url: null, reference_images: privateRefs, aspect_ratio: ratios[ratio], duration: mode === "video" ? duration : undefined }),
+      body: JSON.stringify({ character, mode, prompt, reference_image_url: null, reference_images: privateRefs, placement: placement || "foreground_floor", aspect_ratio: ratios[ratio], duration: mode === "video" ? duration : undefined }),
       cache: "no-store", signal: AbortSignal.timeout(22000)
     });
     const data = await result.json().catch(() => ({}));

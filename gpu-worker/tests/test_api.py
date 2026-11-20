@@ -130,3 +130,36 @@ def test_reference_roles_order_independent_of_client_dict_order():
     encoded = "data:image/jpeg;base64," + base64.b64encode(stream.getvalue()).decode()
     payload = worker.Job(character="Aria", prompt="A portrait", reference_images={"scenery": encoded, "identity": encoded})
     assert [role for role, _ in worker.reference_role_order(payload)] == ["identity", "scenery"]
+
+def test_reference_prompt_geometry_foreground():
+    payload = worker.Job(character="Nicole", prompt="Natural full body portrait", reference_images={},
+                         placement="foreground_floor")
+    text = worker.build_reference_prompt(payload, ["identity", "scenery"])
+    assert "Image 1 is the EXACT identity reference" in text
+    assert "Image 2 is the EXACT scenery reference" in text
+    assert "VISIBLE FLOOR/CARPET" in text
+    assert "CAMERA SIDE of the coffee table" in text
+    assert "leg length" in text
+    assert "contact shadows" in text
+    assert text.endswith(payload.prompt)
+
+
+def test_reference_prompt_composition_variants():
+    base = {"character": "Nicole", "prompt": "Natural pose"}
+    rear = worker.build_reference_prompt(worker.Job(**base, placement="rear_floor"), ["identity", "scenery"])
+    seated = worker.build_reference_prompt(worker.Job(**base, placement="sofa_seated"), ["identity", "scenery"])
+    identity = worker.build_reference_prompt(worker.Job(**base), ["identity"])
+    plain = worker.build_reference_prompt(worker.Job(**base), [])
+    assert "BEHIND the coffee table" in rear
+    assert "hips resting on the cushion" in seated
+    assert "anatomically natural" in identity
+    assert plain == "Natural pose"
+
+
+def test_unknown_subject_placement_rejected():
+    from pydantic import ValidationError
+    try:
+        worker.Job(character="Nicole", prompt="Portrait", placement="on_the_table")
+        assert False, "Expected invalid placement rejection"
+    except ValidationError:
+        pass

@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from urllib.parse import urlencode
+from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -67,6 +68,7 @@ class Job(BaseModel):
     aspect_ratio: str = "9:16"
     reference_image_url: str | None = None
     reference_images: dict[str, str] = Field(default_factory=dict)
+    placement: Literal["foreground_floor", "rear_floor", "sofa_seated"] = "foreground_floor"
     duration: int | None = None
 
 def authorize(authorization: str | None = Header(default=None)):
@@ -190,6 +192,68 @@ def reference_role_order(payload):
     return [(role, decode_private_reference(refs[role])) for role in ("identity", "scenery") if role in refs]
 
 
+PLACEMENT_GUIDANCE = {
+    "foreground_floor": (
+        "Place the subject standing on a CLEAR PATCH OF THE VISIBLE FLOOR/CARPET in the foreground, "
+        "ON THE CAMERA SIDE of the coffee table. The entire person is in front of the table, not inside it. "
+        "Both shoes rest firmly on the floor and cast realistic contact shadows. "
+        "Keep the full standing body and both feet visible within the frame."
+    ),
+    "rear_floor": (
+        "Place the subject standing on the actual floor near the windows, BEHIND the coffee table. "
+        "The table may naturally hide the legs or feet according to correct occlusion, "
+        "but the shoes must never appear on the tabletop or cut through furniture."
+    ),
+    "sofa_seated": (
+        "Seat the subject naturally on the sofa with hips resting on the cushion, "
+        "knees bending anatomically and feet planted on the floor. "
+        "The coffee table remains in front with correct depth and natural occlusion."
+    ),
+}
+
+
+def build_reference_prompt(payload, roles):
+    """Anchor scene geometry and realistic anatomy when composing two references.
+
+    This improves instructions but cannot mathematically guarantee geometry or likeness.
+    """
+    role_set = set(roles)
+    if not role_set:
+        return payload.prompt
+    intro = []
+    for index, role in enumerate(roles, 1):
+        intro.append(
+            f"Image {index} is the EXACT {role} reference; "
+            + ("use only this person's identity, face, hair and general appearance."
+               if role == "identity" else
+               "use this existing room as the master scene and preserve the original camera angle, "
+               "furniture positions, room scale, floor plane, windows, and lighting.")
+        )
+    if "scenery" in role_set and "identity" in role_set:
+        intro.append(
+            "Photographic composite of ONE physically present, realistically sized adult human "
+            "inside the room from Image 2. Respect a single fixed camera perspective and depth. "
+            "Scale the person's overall height and leg length realistically relative to the sofa, "
+            "coffee table and window frames. Legs, pelvis, feet, shoulders and head have "
+            "natural adult human proportions; no compressed legs or miniature body. "
+            "Do not move the coffee table to intersect the person. "
+            "Enforce correct foreground/background occlusion and physically plausible contact shadows."
+        )
+        intro.append(PLACEMENT_GUIDANCE[payload.placement])
+    elif "identity" in role_set:
+        intro.append(
+            "Keep anatomically natural, believable head-to-body, torso-to-leg and shoe proportions; "
+            "do not shorten legs, stretch limbs or change body shape."
+        )
+    else:
+        intro.append(
+            "Preserve scene scale, camera perspective, major furniture, visible floor "
+            "and architectural geometry."
+        )
+    intro.append("Requested scene and styling: " + payload.prompt)
+    return " ".join(intro)
+
+
 def render(job_id, payload):
     global queue_depth
     try:
@@ -202,12 +266,7 @@ def render(job_id, payload):
         else:
             import torch
             references = reference_role_order(payload)
-            prompt = payload.prompt
-            if references:
-                labels = [f"Image {index} is the {role} reference" for index, (role, _) in enumerate(references, 1)]
-                prompt = (". ".join(labels) +
-                    ". Preserve the character's distinctive facial appearance when an identity reference is supplied. " +
-                    "Use the location and architectural details when a scenery reference is supplied. " + prompt)
+            prompt = build_reference_prompt(payload, [role for role, _ in references])
             args = {"prompt": prompt, "width": width, "height": height,
                     "num_inference_steps": 4, "guidance_scale": 1.0}
             if references:
