@@ -6,7 +6,7 @@ are reserved in recreation_steps, preventing duplicate charges after restart.
 import logging
 import tempfile
 from pathlib import Path
-from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision,qa_owner_approval
+from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision,qa_owner_approval,scenery_repair
 
 LOG=logging.getLogger('app-queue')
 
@@ -76,6 +76,16 @@ def process(job):
                    current_segment=job['segment_total'],
                    event=('local_salvage','Recovered existing paid clips without provider generation'))
         if done:LOG.info('LOCAL_SALVAGE completed=true job=%s provider_calls=0',job_id[:8])
+        return
+    if stage=='SCENE_FIX':
+        result=scenery_repair.run(job)
+        if result!='completed':
+            raise RuntimeError('Unexpected local scene-repair result')
+        done=_next(job,stage='DONE',state='COMPLETED',
+                   event=('scenery_repaired',
+                          'Local-only scene replacement preview delivered. No paid provider calls.'))
+        if done:
+            LOG.info('SCENE_FIX completed job=%s provider_calls=0',job_id[:8])
         return
     if stage=='QA_OWNER_APPROVED':
         status=qa_owner_approval.run(job)
