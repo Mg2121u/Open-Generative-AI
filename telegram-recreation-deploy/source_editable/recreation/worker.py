@@ -66,11 +66,23 @@ def loop():
     with db.connect() as conn: conn.execute('SELECT 1')
     logger.info('WORKER_BOOT mode=%s paid_generation_enabled=%s', mode, mode in ('paid_pipeline','app_always_on'))
     last_review=0
+    last_final_recovery=0
     while True:
         try:
             if mode in ('paid_pipeline','app_always_on') and time.monotonic()-last_review>60:
                 db.review_uncertain_submissions()
                 last_review=time.monotonic()
+            if mode=='app_always_on' and time.monotonic()-last_final_recovery>90:
+                # Once per terminal storage failure, automatically salvage
+                # an all-complete job with NO new Wan provider requests.
+                # Active jobs/leases and incomplete or uncertain predictions
+                # are never taken over.
+                recovered=db.auto_recover_finished_uploads()
+                for item in recovered:
+                    logger.info('FINAL_ARCHIVE_RESCUE queued=true job=%s '
+                                'archived_segments=%s paid_requests=0',
+                                str(item['job_id'])[:8],item['segment_total'])
+                last_final_recovery=time.monotonic()
             job=(db.claim_local_preflight(WORKER_ID) if mode=='preflight_only'
                  else db.claim_app(WORKER_ID) if mode=='app_always_on'
                  else db.claim(WORKER_ID))
