@@ -66,3 +66,32 @@ def test_ephemeral_output_signed_url(tmp_path):
         assert resp.headers["content-type"]=="image/png"
         assert resp.content.startswith(b"\x89PNG")
         assert client.get(path.path+"?expires=100&sig="+("0"*64)).status_code==403
+
+def test_salad_portal_legacy_environment_names(monkeypatch):
+    """Salad's UI transformed WORKER_API_TOKEN to per-letter underscores."""
+    for normal in ("WORKER_API_TOKEN", "STORAGE_DRIVER", "ENVIRONMENT", "MAX_REPLICAS"):
+        monkeypatch.delenv(normal, raising=False)
+    monkeypatch.setenv("_w_o_r_k_e_r__a_p_i__t_o_k_e_n", "test-secret-that-has-40-characters-1234567890")
+    monkeypatch.setenv("_s_t_o_r_a_g_e__d_r_i_v_e_r", "ephemeral")
+    monkeypatch.setenv("_e_n_v_i_r_o_n_m_e_n_t", "production")
+    applied = worker.normalize_salad_environment()
+    assert "WORKER_API_TOKEN" in applied
+    assert os.environ["WORKER_API_TOKEN"] == "test-secret-that-has-40-characters-1234567890"
+    assert os.environ["STORAGE_DRIVER"] == "ephemeral"
+    assert os.environ["ENVIRONMENT"] == "production"
+    assert os.environ.get("MAX_REPLICAS") is None
+    from fastapi import HTTPException
+    worker.authorize("Bearer test-secret-that-has-40-characters-1234567890")
+    try:
+        worker.authorize("Bearer invalid")
+        assert False, "Expected 401 for bad credential"
+    except HTTPException as exc:
+        assert exc.status_code == 401
+
+
+def test_canonical_salad_env_name_preferred(monkeypatch):
+    monkeypatch.setenv("STORAGE_DRIVER", "ephemeral")
+    monkeypatch.setenv("_s_t_o_r_a_g_e__d_r_i_v_e_r", "wrong")
+    applied = worker.normalize_salad_environment()
+    assert "STORAGE_DRIVER" not in applied
+    assert os.environ["STORAGE_DRIVER"] == "ephemeral"

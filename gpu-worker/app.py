@@ -18,8 +18,34 @@ from fastapi.responses import Response
 from local_store import EphemeralStore
 from pydantic import BaseModel, Field
 
+def normalize_salad_environment():
+    """Accept the legacy auto-converted names shown in the user's Salad group.
+
+    Only known variables are aliased. Canonical env names always take priority.
+    Never print environment values, especially credentials.
+    """
+    aliases = {
+        "WORKER_API_TOKEN": "_w_o_r_k_e_r__a_p_i__t_o_k_e_n",
+        "STORAGE_DRIVER": "_s_t_o_r_a_g_e__d_r_i_v_e_r",
+        "ENVIRONMENT": "_e_n_v_i_r_o_n_m_e_n_t",
+        "MAX_REPLICAS": "_m_a_x__r_e_p_l_i_c_a_s",
+    }
+    applied = []
+    for standard, legacy in aliases.items():
+        if standard not in os.environ and legacy in os.environ:
+            os.environ[standard] = os.environ[legacy]
+            applied.append(standard)
+    return applied
+
+
+# Salad Portal sometimes converts upper-case environment variable names to
+# per-letter snake_case. Normalize the documented legacy names before setup.
+_normalized_settings = normalize_salad_environment()
+
 log = logging.getLogger("salad-worker")
 logging.basicConfig(level="INFO")
+if _normalized_settings:
+    log.warning("Recognized Salad environment aliases: %s", ", ".join(_normalized_settings))
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 pool = ThreadPoolExecutor(max_workers=1)
 lock = threading.Lock()

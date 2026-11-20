@@ -70,3 +70,12 @@ For now choose Independent GPU and **Image Studio** in the app. The worker rejec
 - `STORAGE_DRIVER=ephemeral` uses temporary local disk; no persistent history or reference photos; all output can disappear when a node preempts/restarts, and signed URLs will stop working.
 - One replica ONLY; never use this driver with autoscaling. For real users, move to private S3 and a durable queue.
 - A public Salad gateway is protected by the worker Bearer token on job endpoints; the image endpoints require short-lived HMAC-signed links. Protect the Vercel studio page before uploading personal photos.
+
+## Salad Portal's accidental auto-converted environment variable names
+
+Salad's saved configuration was inspected and its three variable names had been transformed into per-letter snake case. The pilot worker now accepts these three exact legacy names as aliases, with the standard names taking precedence:
+- `_w_o_r_k_e_r__a_p_i__t_o_k_e_n` → `WORKER_API_TOKEN`
+- `_s_t_o_r_a_g_e__d_r_i_v_e_r` → `STORAGE_DRIVER`
+- `_e_n_v_i_r_o_n_m_e_n_t` → `ENVIRONMENT`
+
+No API tokens are printed. Legacy alias handling does **not** remove the need to rotate the owner token once the pilot is online, since the token was included in prior configuration screenshots/messages. Use the updated image **after** its build and real HTTP tests have passed; do not restart a billable instance to test unverified builds.
