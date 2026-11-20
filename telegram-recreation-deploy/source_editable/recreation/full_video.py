@@ -389,8 +389,47 @@ def _merge_original_sound(job, segments, keys, *, destination_override=None, mot
             raise RuntimeError(
                 'Final original-audio merge failed duration validation: '
                 f'expected={duration_expected:.3f} actual={info["duration"]:.3f}')
-        LOGGER.info('ASSEMBLY_PHASE job=%s stage=upload_start',job_id[:8])
-        storage.upload_key(destination,final)
+        # Storage backends such as Supabase S3 can accept every 8-second
+        # model segment yet reject the combined 4-minute MP4 (EntityTooLarge).
+        # Only LOCAL transcoding is permitted: never regenerate paid clips.
+        from boto3.exceptions import S3UploadFailedError
+        raw_bytes=final.stat().st_size
+        max_bytes=storage.final_video_max_bytes()
+        upload_file=final
+        LOGGER.info('ASSEMBLY_PHASE job=%s stage=size_check bytes=%d configured_cap=%d',
+                    job_id[:8],raw_bytes,max_bytes)
+        if raw_bytes>max_bytes:
+            fitted=root/'final_storage_fit.mp4'
+            result=ffmpeg.fit_mp4_under_storage_limit(final,fitted,max_bytes=max_bytes)
+            upload_file=fitted
+            LOGGER.info('ASSEMBLY_PHASE job=%s stage=size_fit_complete original_bytes=%d final_bytes=%d no_wan_calls=true',
+                        job_id[:8],result['before_bytes'],result['after_bytes'])
+        LOGGER.info('ASSEMBLY_PHASE job=%s stage=upload_start bytes=%d',job_id[:8],upload_file.stat().st_size)
+        try:
+            storage.upload_key(destination,upload_file)
+        except S3UploadFailedError as exc:
+            if 'EntityTooLarge' not in str(exc):
+                raise
+            # The particular S3 bucket may have a LOWER configured limit.
+            # A single bounded re-encode remains a local-only recovery action.
+            reduced=root/'final_storage_fit_smaller.mp4'
+            next_cap=min(30_000_000,int(max_bytes*.70))
+            if next_cap<12_000_000:
+                raise provider.NeedsReview(
+                    'Final MP4 exceeds the bucket limit. Increase the bucket upload size cap; '
+                    'all generated clips are archived and no Wan retries are needed.') from exc
+            result=ffmpeg.fit_mp4_under_storage_limit(final,reduced,max_bytes=next_cap)
+            LOGGER.warning('ASSEMBLY_PHASE job=%s stage=storage_size_fallback bytes=%d cap=%d',
+                           job_id[:8],result['after_bytes'],next_cap)
+            try:
+                storage.upload_key(destination,reduced)
+            except S3UploadFailedError as exc2:
+                if 'EntityTooLarge' in str(exc2):
+                    raise provider.NeedsReview(
+                        'Final MP4 still exceeds the configured storage object limit. '
+                        'All 27 paid sections are archived. Increase the S3 bucket '
+                        'file-size cap; use /finish to retry local assembly only.') from exc2
+                raise
         LOGGER.info('ASSEMBLY_PHASE job=%s stage=upload_complete',job_id[:8])
     return destination
 
