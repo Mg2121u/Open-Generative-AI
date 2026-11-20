@@ -180,13 +180,58 @@ def test_automatic_recovery_only_for_terminal_full_archive_once(monkeypatch):
     assert result[0]['segment_total']==27
     sql,params=statements[0]
     assert "stage='FINAL_ASSEMBLE'" in sql
-    assert "j.state IN ('FAILED','NEEDS_REVIEW')" in sql
+    assert "j.state IN ('FAILED','NEEDS_REVIEW','QUEUED','WAITING_PROVIDER')" in sql
     assert 'j.lease_owner IS NULL' in sql
     assert "s.state='COMPLETED'" in sql
     assert "s.state!='COMPLETED'" in sql
     assert 'auto_attempted' in sql
+    assert 'owner_requested' in sql
     assert 'S3UploadFailedError' in sql
     assert params[0]==[123]
     monkeypatch.setenv('ALLOWED_TELEGRAM_USER_IDS','')
     assert db.auto_recover_finished_uploads()==[]
     assert len(statements)==1
+
+
+def test_defer_when_worker_lease_active_never_moves_running_job(monkeypatch):
+    jobs=[]
+    class Conn:
+        def __enter__(self):return self
+        def __exit__(self,*a):return False
+        def execute(self,query,params):
+            jobs.append((query,params))
+            return SimpleNamespace(fetchone=lambda:{
+                'job_id':job()['job_id'],'state':'RUNNING',
+                'stage':'AUTO_GENERATE','segment_total':27})
+    monkeypatch.setattr(db,'connect',lambda:Conn())
+    row=db.defer_final_assembly(123,'32e09922')
+    assert row['segment_total']==27
+    sql,params=jobs[0]
+    assert 'owner_requested' in sql
+    assert "j.lease_owner IS NOT NULL AND j.lease_until>now()" in sql
+    assert "s.state='COMPLETED'" in sql
+    assert "s.state!='COMPLETED'" in sql
+    assert "SET checkpoint=jsonb_set" in sql
+    assert "SET stage=" not in sql
+    assert "SET state=" not in sql
+    assert "lease_owner=NULL" not in sql
+    assert params[0]==123 and params[1]=='32e09922'
+    with pytest.raises(ValueError):
+        db.defer_final_assembly(123,'invalid')
+    assert len(jobs)==1
+
+
+def test_finish_active_worker_marks_deferred_instead_of_rejecting(monkeypatch):
+    monkeypatch.setattr(telegram,'ALLOWED_USERS',{123})
+    monkeypatch.setattr(telegram.db,'queue_final_assembly',lambda *_:None)
+    monkeypatch.setattr(telegram.db,'defer_final_assembly',
+                        lambda owner,prefix: {
+                            'job_id':job()['job_id'],
+                            'segment_total':27,'state':'RUNNING'})
+    seen=[]
+    monkeypatch.setattr(telegram,'say',lambda _,body:seen.append(body))
+    telegram.process_message({'from':{'id':123},'chat':{'id':123},
+                              'text':'/finish 32e09922'})
+    assert 'request is SAVED' in seen[-1]
+    assert 'No further command needed' in seen[-1]
+    assert 'without recharging or regenerating any section' in seen[-1]
