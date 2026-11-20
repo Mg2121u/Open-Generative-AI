@@ -21,7 +21,7 @@ jobs:
       - name: Smoke-test real HTTP listener and health paths (CPU/mock, no Salad cost)
         run: |
           cd gpu-worker
-          ENVIRONMENT=test MOCK_INFERENCE=1 STORAGE_DRIVER=ephemeral MAX_REPLICAS=1 WORKER_API_TOKEN=test-only-0123456789abcdefghijklmnopqrstuvwxyz uvicorn app:app --host 0.0.0.0 --port 8000 > /tmp/salad-worker-smoke.log 2>&1 &
+          ENVIRONMENT=test MOCK_INFERENCE=1 STORAGE_DRIVER=ephemeral MAX_REPLICAS=1 WORKER_API_TOKEN=test-only-0123456789abcdefghijklmnopqrstuvwxyz uvicorn app:app --host :: --port 8000 > /tmp/salad-worker-smoke.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
           ready=0
@@ -36,4 +36,6 @@ jobs:
             cat /tmp/salad-worker-smoke.log
             exit 1
           fi
-          curl --fail --silent http://127.0.0.1:8000/readyz | grep -q ready
+          curl --fail --silent --noproxy '*' -6 -g 'http://[::1]:8000/healthz' | grep -q alive
+          curl --fail --silent --noproxy '*' -6 -g 'http://[::1]:8000/readyz' | grep -q ready
+          curl --fail --silent --noproxy '*' -4 'http://127.0.0.1:8000/readyz' | grep -q ready

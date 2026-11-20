@@ -9,4 +9,4 @@ COPY app.py local_store.py ./
 RUN useradd -m -u 10001 worker && mkdir -p /data/hf && chown worker:worker /data/hf
 USER worker
 EXPOSE 8000
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "app:app", "--host", "::", "--port", "8000", "--workers", "1"]

@@ -79,3 +79,6 @@ Salad's saved configuration was inspected and its three variable names had been 
 - `_e_n_v_i_r_o_n_m_e_n_t` → `ENVIRONMENT`
 
 No API tokens are printed. Legacy alias handling does **not** remove the need to rotate the owner token once the pilot is online, since the token was included in prior configuration screenshots/messages. Use the updated image **after** its build and real HTTP tests have passed; do not restart a billable instance to test unverified builds.
+
+## 2026-11-20 startup probe failure after binding IPv4-only
+Container group v5 System Events show two instances reached Running with 47–48 seconds of uptime then **Instance Interrupted (Startup Probe Failure)**. Container logs show uvicorn running and loading model weights, with no Python exception. Salad's Container Gateway requires IPv6 support. The prior `--host 0.0.0.0` change enabled IPv4 only and made gateway/probe network reachability a strong failure hypothesis. Revert to `--host ::` and test real HTTP responses over IPv6 `[::1]` and IPv4 loopback in CI. Do not claim this establishes Salad runtime reachability without a successful live probe.
