@@ -214,6 +214,24 @@ def check_archived(job,video_key,*,qa_key=None):
     """Persist private evidence. Block later paid clips when confidence is bad."""
     if os.getenv('RECREATION_FACE_QA_MODE','on').strip().lower()=='off':
         return {'status':'disabled'}
+    # This exception NEVER re-labels a failed face check as 'passed'. It only
+    # allows the owner's explicitly accepted, already-paid archived section to
+    # be reused so the next section can proceed. All OTHER sections are checked.
+    from . import qa_continue
+    approval=qa_continue.owner_acceptance(job,video_key)
+    if approval:
+        with tempfile.TemporaryDirectory() as td:
+            proof=Path(td)/'original_failed_face_qa.json'
+            try:
+                storage.download_key(video_key+'.face_qa_v1.json',proof)
+                observed=json.loads(proof.read_text())
+            except (OSError,ValueError,TypeError) as exc:
+                raise IdentityQualityReview('Owner-approved clip lost original face QA evidence; review needed') from exc
+        if observed.get('status')!=approval['original_status']:
+            raise IdentityQualityReview('Owner approval does not match original archived face QA result')
+        LOG.warning('NICOLE_IDENTITY owner_accepted_negative_qa=true job=%s original_status=%s',
+                    str(job['job_id'])[:8],approval['original_status'])
+        return approval
     anchor=((job.get('checkpoint') or {}).get('identity') or {}).get('nicole_image_key')
     if not anchor:
         raise IdentityQualityReview('Nicole reference is not ready')
