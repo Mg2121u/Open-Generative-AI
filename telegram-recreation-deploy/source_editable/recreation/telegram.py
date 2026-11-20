@@ -99,7 +99,7 @@ def process_message(message):
     if not ALLOWED_USERS or int(owner) not in ALLOWED_USERS:
         say(chat,'This app is private. Send /id to retrieve your ID for access.'); return
     if cmd in ('/start','/help'):
-        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description> or photo with caption /scenery or reply /scenery to photo\n/scenery — arm the NEXT photo as a scenery reference\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept archived face-QA mismatch; continue remaining sections (paid) or deliver one\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
+        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description> or photo with caption /scenery or reply /scenery to photo\n/scenery — arm the NEXT photo as a scenery reference\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/finish JOB8 — recover a fully generated video after storage failure (NO WAN CHARGES)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept archived face-QA mismatch; continue remaining sections (paid) or deliver one\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
         return
     if cmd=='/new':
         job=db.create_draft(chat,owner)
@@ -120,6 +120,28 @@ def process_message(message):
             'a new draft from a completed source, check that your scenery '
             'photo is ready in /status, then explicitly approve the new paid '
             'generation using /generate. This command did not start a render.')
+        return
+    if cmd=='/finish':
+        try:
+            saved=db.queue_final_assembly(owner,value.strip())
+            if saved:
+                say(chat,(
+                    f'Local-only final assembly queued for {str(saved["job_id"])[:8]}. '
+                    f'All {saved["segment_total"]} paid Wan sections must already exist; '
+                    'none will be regenerated or repurchased. The final video '
+                    'will be prepared within the storage size limit with original audio, '
+                    'then delivered privately. /status tracks the result.'
+                ))
+            else:
+                say(chat,(
+                    'Local recovery is not yet eligible. It requires all paid '
+                    'sections archived, a verified source video, an S3 upload failure '
+                    'and no active worker lease. Use /status. '
+                    'If assembly is already RUNNING, the patched uploader may '
+                    'complete it automatically. No Wan generation was queued.'
+                ))
+        except (ValueError,TypeError,KeyError) as exc:
+            say(chat,'Archive recovery: '+str(exc)[:320])
         return
     if cmd in ('/review_qa','/approve_qa'):
         from . import full_video
