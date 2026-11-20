@@ -37,7 +37,7 @@ def test_pilot_flow():
         assert client.get("/readyz").status_code==200
         assert client.post("/jobs",json={"character":"Aria","prompt":"Studio portrait", "reference_images":{"identity":make_reference()}}).status_code==401
         headers={"Authorization":"Bearer a_test_token_longer_than_32_bytes_123456"}
-        r=client.post("/jobs",headers=headers,json={"character":"Aria","prompt":"Studio portrait"})
+        r=client.post("/jobs",headers=headers,json={"character":"Aria","prompt":"Studio portrait","reference_images":{"identity":make_reference()}})
         assert r.status_code==202, r.text
         for _ in range(100):
             data=client.get("/jobs/"+r.json()["id"],headers=headers).json()

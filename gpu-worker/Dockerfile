@@ -6,6 +6,7 @@ RUN pip install --no-cache-dir torch==2.6.0 --index-url https://download.pytorch
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py local_store.py qwen_engine.py ./
+RUN python -m py_compile app.py qwen_engine.py local_store.py
 RUN useradd -m -u 10001 worker && mkdir -p /data/hf && chown worker:worker /data/hf
 USER worker
 EXPOSE 8000

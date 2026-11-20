@@ -73,7 +73,7 @@ export async function POST(request) {
     }
     if (health.status !== 200) {
       return NextResponse.json({ error: health.status === 503
-        ? "Salad server is online, but FLUX model initialization is not complete or failed. Check the latest Salad Container Logs before generating."
+        ? "Salad server is online, but Qwen model initialization is not complete or failed. Check the latest Salad Container Logs before generating."
         : "Salad GPU is not ready (health status " + health.status + ")." }, { status: 503 });
     }
     const result = await fetch(endpoint.replace(/\/$/, "") + "/jobs", {
