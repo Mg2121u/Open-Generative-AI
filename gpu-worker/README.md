@@ -54,3 +54,6 @@ Reference images are resized in-browser before submission and decoded in memory;
 - Never expose user reference photos through a public link for self-hosted editing.
 - One image at a time on the pilot. Check both physical proportions and identity/scenery consistency.
 - Keep current production Telegram, Supabase, Stars and Fanvue integrations untouched. 
+
+## November 20, 2026 — Salad Qwen Torchvision failure fixed in Docker
+The v8 Salad Container Logs from 09:33–10:01 show successful downloading and loading of 5/6 Qwen pipeline components before `ImportError: Qwen2VLVideoProcessor requires the Torchvision library but it was not found in your environment`. This is a **missing Docker dependency**, not a Hugging Face auth error, CUDA error or GPU allocation problem. The Dockerfile now installs PyTorch 2.6.0 with the matching torchvision 0.21.0 from the official CUDA 12.4 wheel index and, during the Docker build, imports `Qwen2VLVideoProcessor` explicitly to detect a recurrence before any paid Salad execution. This fixes the identified missing module, but does not guarantee successful Qwen inference or memory fit. Keep Salad stopped until the new image build succeeds and is deliberately installed.
