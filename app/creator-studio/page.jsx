@@ -54,7 +54,7 @@ export default function CreatorStudioPage() {
       if (data.status === "RECOVERING") {
         if (gatewayDownSince.current === null) gatewayDownSince.current = Date.now();
         if (Date.now() - gatewayDownSince.current >= 120000) {
-          throw new Error("Salad has remained unavailable for two minutes. The job may have been interrupted. Check the container logs before any new generation.");
+          throw new Error(activeJob.provider === "wavespeed" ? "WaveSpeed status has remained unavailable for two minutes. Check WaveSpeed History for this job before resubmitting." : "Salad has remained unavailable for two minutes. The job may have been interrupted. Check the container logs before any new generation.");
         }
         setError(data.error || "Reconnecting to Salad to check this job.");
         setJob({ ...activeJob, status: "RECOVERING" });
@@ -186,7 +186,7 @@ export default function CreatorStudioPage() {
             {error && <p role="alert" className={styles.error}>{error}</p>}
             <button disabled={!!busy || gpuUnavailable || (provider === "gpu" && mode === "video")} className={styles.generate} type="submit">{busy ? "Generation in progress…" : "Generate " + (mode === "image" ? "image" : "video") + "  ✦"}</button>
             {job && <p aria-live="polite" className={styles.jobStatus}>Latest job: {job.status === "COMPLETED" ? "Complete" : job.status === "IN_PROGRESS" ? "Rendering…" : job.status === "IN_QUEUE" ? "Queued…" : job.status === "RECOVERING" ? "Reconnecting to Salad — same job, no resubmission…" : job.status === "ERROR" ? "Failed or interrupted" : job.status}</p>}
-            {job?.status === "ERROR" && job?.provider === "gpu" && <button type="button" className={styles.readonly} onClick={() => { gatewayDownSince.current = null; setError(""); setJob({ ...job, status: "RECOVERING" }); }}>Recheck existing GPU job (no new generation)</button>}
+            {job?.status === "ERROR" && ["gpu", "wavespeed"].includes(job?.provider) && <button type="button" className={styles.readonly} onClick={() => { gatewayDownSince.current = null; setError(""); setJob({ ...job, status: "RECOVERING" }); }}>Recheck existing job (no new generation)</button>}
           </form>
         </section>
         <section className={styles.output}>
