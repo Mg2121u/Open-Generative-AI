@@ -1,0 +1,40 @@
+# Aria × Nicole Creator Studio — Qwen-only image models (isolated preview)
+
+Updated November 20, 2026. Existing Telegram/Render/Nicole production agents are unchanged. This is a draft-branch Studio and GPU worker; production deployments are not updated automatically.
+
+## Available image engines
+- **Private Salad:** `Qwen/Qwen-Image-Edit-2511` using a Q4_K_M GGUF transformer + 4-bit text encoder. It **requires at least one private reference image**, and accepts identity plus scenery together. The worker runs the multi-image Qwen editing pipeline. Qwen-Image-Edit-2511 is Apache-2.0 licensed, allowing commercial use subject to the other terms/policies.
+- **fal.ai Qwen image creation:** `fal-ai/qwen-image-2512` text-to-image, requiring the existing `FAL_KEY` in Vercel.
+- **fal.ai Qwen image editing:** `fal-ai/qwen-image-edit-2511` using an explicitly supplied HTTPS image URL. Use the **private Salad** option for private photos rather than publicly hosted references.
+- No previous image model remains selectable in the Studio UI, queue adapter, or worker. The separate hosted video tab still offers Wan I2V; the private GPU is image-only.
+- **Important:** newer `Qwen-Image-2.1` has a *non-commercial research* license; the commercial-oriented pilot uses Apache-2.0 `Edit-2511` instead.
+
+## Private reference data and geometry
+- The Studio downsamples reference photos to maximum 1024px and JPEG-compresses them, keeping inputs in browser memory until submitted.
+- Vercel forwards compact base64 JPEG inputs to the authenticated Salad worker over HTTPS, never writes them to public object storage or logs credentials.
+- Identity reference is first, scenery second; the worker builds a camera-perspective and floor-placement instruction and allows foreground standing, rear standing or seated on sofa.
+- Output quality requires manual QA: exact face/height, natural anatomy, room scale and occlusion are *not* guaranteed by either Qwen or prompting.
+
+## Production constraints
+- **Salad model not yet live-verified.** The upgraded worker needs its own completed image build and a manually approved rollout; rebuilding the image never updates a running instance.
+- 24GB GPU VRAM and 24GB system RAM may not be sufficient for this Qwen 20B model even with quantization. Check GPU/CPU memory and image downloads before any billable launch. Cold start may take much longer than earlier models.
+- GPU `/healthz` is not model readiness; use `/readyz` for inference availability, and check Salad Container Logs for failures.
+- Existing Studio tokens, GPU tokens, Salad group settings, and other workflows are unchanged by this code revision.
+
+## Vercel authentication and endpoints
+Server-side preview env vars: `STUDIO_ACCESS_TOKEN`, `PRIVATE_GPU_ENDPOINT`, `PRIVATE_GPU_TOKEN`, and optional `FAL_KEY`. Never use `NEXT_PUBLIC_` for secrets.
+
+`POST /api/creator-studio/queue` validates owner auth and provider, denies private GPU jobs until `/readyz` is healthy, and never submits image jobs automatically on page load.
+`POST /api/creator-studio/status` fetches the async result for an existing provider job.
+
+## Security
+Short-lived image links and ephemeral storage mean generated images are not preserved across GPU restarts. This draft is not a paid media delivery system; persistent storage, retention policy, UI access restrictions and user consent/rights checks would be needed before commercial automation.
+
+## November 20, 2026 — Salad 502 during Qwen inference
+The live Studio returned `GPU job status unavailable (HTTP 502)` after an earlier healthy Qwen check. Subsequent Studio health checks reported Salad unreachable. This indicates the status request could not reach the worker, but does not establish whether the root cause was CUDA OOM, OS OOM, preemption, or a gateway interruption. The status endpoint now returns `RECOVERING` for transient 502/503/504 and transport failures, and reports the more actionable "job record lost" condition when the worker responds 404 (ephemeral storage). The Studio polls one status call at a time for up to 2 minutes, retains the original job ID, provides a manual recheck button after failure, and **never automatically requeues a paid generation**. Owner still needs current Salad Container Logs / System Events to identify the real crash cause. No production Telegram/Render settings, Salad secrets, or Qwen GPU Docker image were changed.\n
+## Wan 2.5 Image Edit (WaveSpeedAI) — November 20, 2026
+- Provider **WaveSpeedAI** added as an Image Studio option with model `alibaba/wan-2.5/image-edit`. This is an **image editor**, not a Wan 2.5 video-edit model. Hosted video remains the existing separate Wan 3.0 image-to-video option.
+- Accepts 1–2 inline browser reference uploads (identity first, scenery second) already compressed to JPEG. Vercel uploads the bytes server-side via WaveSpeed's documented `/api/v3/media/upload/binary`, then submits exactly **one** paid edit request to `/api/v3/alibaba/wan-2.5/image-edit`, polling `/api/v3/predictions/{id}/result` for output.
+- **Privacy**: WaveSpeedAI temporarily retains uploaded reference files for 7 days. This is an external hosted service, not private Salad execution. The references leave the Studio only after the user clicks Generate. Model and host content rules apply.
+- `WAVESPEED_API_KEY` must be set server-side on the Studio preview branch. Do not expose the key to the browser, embed it in Git, or replace/rotate existing tokens. WaveSpeedAI charges only on model submit, not on local option selection. Don't retry uncertain paid submissions; check WaveSpeed History. An unavailable status is retried against the same prediction ID without resubmitting.
+- Run one explicitly authorized live generation to validate provider functionality; build success and API schema compatibility are not proof of real inference.
