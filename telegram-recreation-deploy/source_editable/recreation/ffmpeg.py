@@ -76,6 +76,56 @@ def trim_video_stream_copy(source, output, duration):
     return probe(output)
 
 
+
+def fit_mp4_under_storage_limit(source, output, *, max_bytes=44_000_000):
+    """Local-only final MP4 re-encode under an S3-compatible object-size cap.
+
+    Preserve the full video, framing, original audio, and duration; NEVER
+    re-request source generation. Under-sized videos are copied losslessly.
+    One-pass ABR aims below the limit with overhead headroom; up to three
+    progressively smaller encodes are allowed if content is difficult.
+    """
+    import math
+    import shutil
+    source=Path(source);output=Path(output)
+    if not source.is_file() or not 12_000_000 <= max_bytes <= 2_000_000_000:
+        raise ValueError('Invalid final-video source or storage cap')
+    before=probe(source)
+    if not before['has_audio'] or not 2 <= before['duration'] <= 7200:
+        raise ValueError('Final file must contain the source soundtrack')
+    if source.stat().st_size <= max_bytes:
+        shutil.copyfile(source,output)
+        return {'before_bytes':source.stat().st_size,
+                'after_bytes':output.stat().st_size,'encoded':False}
+    duration=before['duration']
+    audio_bps=112_000
+    # Fit safely under storage limits including MP4 headers and rate-control
+    # overshoot. Two smaller attempts remain available without another Wan call.
+    budget_bps=max(230_000,int((max_bytes*8/duration-audio_bps)*.85))
+    for factor in (1.0,.75,.55):
+        video_bps=max(160_000,int(budget_bps*factor))
+        maxrate=int(video_bps*1.3)
+        run('ffmpeg','-hide_banner','-loglevel','error','-y',
+            '-i',str(source),
+            '-map','0:v:0','-map','0:a:0',
+            '-c:v','libx264','-preset','medium',
+            '-b:v',str(video_bps),'-maxrate',str(maxrate),
+            '-bufsize',str(maxrate*2),
+            '-pix_fmt','yuv420p',
+            '-c:a','aac','-b:a','112k','-ar','44100',
+            '-movflags','+faststart',str(output),timeout=1200)
+        size=output.stat().st_size
+        actual=probe(output)
+        if (not actual['has_audio'] or
+                actual['width']!=before['width'] or
+                actual['height']!=before['height'] or
+                abs(actual['duration']-duration)>.20):
+            raise RuntimeError('Storage-sized final video lost duration, frames, or original soundtrack')
+        if size<=max_bytes:
+            return {'before_bytes':source.stat().st_size,
+                    'after_bytes':size,'encoded':True}
+    raise RuntimeError('Could not fit completed video under the configured storage size cap')
+
 def extract_last_frame(video, output):
     """Decode the actual final frame from a generated MP4, not a source frame.
 
