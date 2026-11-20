@@ -1,6 +1,7 @@
 import os
 import io
 import time
+import base64
 os.environ["ENVIRONMENT"]="test"
 os.environ["MOCK_INFERENCE"]="1"
 os.environ["WORKER_API_TOKEN"]="a_test_token_longer_than_32_bytes_123456"
@@ -12,6 +13,14 @@ os.environ["S3_SECRET_KEY"]="test"
 import app as worker
 from fastapi.testclient import TestClient
 from PIL import Image
+
+def make_reference():
+    from PIL import Image
+    image = Image.new("RGB", (48, 48), "tan")
+    buf = io.BytesIO()
+    image.save(buf, "JPEG")
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
 
 class FakeS3:
     def __init__(self): self.data={}
@@ -26,7 +35,7 @@ def test_pilot_flow():
     with TestClient(worker.app) as client:
         assert client.get("/healthz").status_code==200
         assert client.get("/readyz").status_code==200
-        assert client.post("/jobs",json={"character":"Aria","prompt":"Studio portrait"}).status_code==401
+        assert client.post("/jobs",json={"character":"Aria","prompt":"Studio portrait", "reference_images":{"identity":make_reference()}}).status_code==401
         headers={"Authorization":"Bearer a_test_token_longer_than_32_bytes_123456"}
         r=client.post("/jobs",headers=headers,json={"character":"Aria","prompt":"Studio portrait"})
         assert r.status_code==202, r.text
@@ -36,7 +45,7 @@ def test_pilot_flow():
             time.sleep(.05)
         assert data["status"]=="COMPLETED"
         assert data["assets"][0].startswith("https://example.test/")
-        assert client.post("/jobs",headers=headers,json={"character":"Nicole","prompt":"portrait","mode":"video"}).status_code==422
+        assert client.post("/jobs",headers=headers,json={"character":"Nicole","prompt":"portrait","mode":"video","reference_images":{"identity":make_reference()}}).status_code==422
 
 def test_ephemeral_output_signed_url(tmp_path):
     from local_store import EphemeralStore
@@ -49,7 +58,7 @@ def test_ephemeral_output_signed_url(tmp_path):
         worker.s3=EphemeralStore(tmp_path)
         worker.model="mock"
         worker.ready.set()
-        created=client.post("/jobs",headers=token,json={"character":"Nicole","prompt":"A sunrise portrait"})
+        created=client.post("/jobs",headers=token,json={"character":"Nicole","prompt":"A sunrise portrait","reference_images":{"identity":make_reference()}})
         assert created.status_code==202,created.text
         job_id=created.json()["id"]
         for _ in range(100):
@@ -163,3 +172,32 @@ def test_unknown_subject_placement_rejected():
         assert False, "Expected invalid placement rejection"
     except ValidationError:
         pass
+
+def test_qwen_reference_required_and_input_order():
+    from qwen_engine import qwen_inputs, MODEL_ID, GGUF_FILENAME
+    assert MODEL_ID == "Qwen/Qwen-Image-Edit-2511"
+    assert GGUF_FILENAME.endswith("Q4_K_M.gguf")
+    from PIL import Image
+    identity = Image.new("RGB", (64, 64), "white")
+    scenery = Image.new("RGB", (64, 64), "blue")
+    args = qwen_inputs("Keep the room", [("identity", identity), ("scenery", scenery)], 640, 1152)
+    assert args["image"] == [identity, scenery]
+    assert args["num_inference_steps"] >= 24
+    assert args["width"] == 640
+    assert args["height"] == 1152
+    try:
+        qwen_inputs("Portrait", [], 640, 1152)
+        assert False
+    except ValueError:
+        pass
+
+
+def test_qwen_worker_refuses_unconditioned_generation():
+    worker.s3 = FakeS3()
+    worker.model = "mock"
+    worker.ready.set()
+    with TestClient(worker.app) as client:
+        headers = {"Authorization": "Bearer a_test_token_longer_than_32_bytes_123456"}
+        r = client.post("/jobs", headers=headers, json={"character":"Nicole", "prompt":"Portrait"})
+        assert r.status_code == 422
+        assert "reference" in r.json()["detail"].lower()

@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 from local_store import EphemeralStore
+from qwen_engine import load_qwen_engine, render_qwen_image
 from pydantic import BaseModel, Field
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -130,14 +131,11 @@ def init():
             model = "mock"
         else:
             import torch
-            from diffusers import Flux2KleinPipeline
             if not torch.cuda.is_available():
                 raise RuntimeError("CUDA GPU unavailable")
-            model = Flux2KleinPipeline.from_pretrained(
-                "black-forest-labs/FLUX.2-klein-4B", torch_dtype=torch.bfloat16
-            ).to("cuda")
+            model = load_qwen_engine()
         ready.set()
-        log.info("Model and private storage ready")
+        log.info("Qwen model and private storage ready")
     except Exception:
         log.exception("Initialization failed; readiness will stay false")
 
@@ -267,12 +265,7 @@ def render(job_id, payload):
             import torch
             references = reference_role_order(payload)
             prompt = build_reference_prompt(payload, [role for role, _ in references])
-            args = {"prompt": prompt, "width": width, "height": height,
-                    "num_inference_steps": 4, "guidance_scale": 1.0}
-            if references:
-                images = [img for _, img in references]
-                args["image"] = images if len(images) > 1 else images[0]
-            image = model(**args).images[0]
+            image = render_qwen_image(model, prompt, references, width, height)
         stream = io.BytesIO()
         image.save(stream, format="PNG")
         key = f"{PREFIX}/outputs/{payload.character.lower()}/{job_id}.png"
@@ -296,11 +289,13 @@ def create_job(payload: Job):
     if payload.character not in ("Aria", "Nicole") or payload.aspect_ratio not in SIZES:
         raise HTTPException(422, "Invalid character or aspect ratio")
     if payload.mode != "image" or payload.duration is not None or payload.reference_image_url:
-        raise HTTPException(422, "GPU pilot supports only text-to-image or inline reference image editing")
+        raise HTTPException(422, "Qwen pilot supports inline reference image editing only; video is not available")
     try:
-        reference_role_order(payload)
+        refs = reference_role_order(payload)
+        if not refs:
+            raise ValueError("Qwen edit requires a reference image")
     except ValueError:
-        raise HTTPException(422, "Invalid private reference image: JPEG under 1.35 MB and 6 megapixels required")
+        raise HTTPException(422, "Qwen needs at least one private reference JPEG, under 1.35 MB and 6 megapixels")
     with lock:
         if queue_depth >= 2:
             raise HTTPException(429, "Queue full")

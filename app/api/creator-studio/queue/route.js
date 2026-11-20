@@ -3,7 +3,7 @@ import { authenticate, falRequest, publicError, validExternalImage } from "../..
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-const IMAGE_MODELS = new Set(["fal-ai/flux-2", "fal-ai/flux-2/klein/9b"]);
+const IMAGE_MODELS = new Set(["fal-ai/qwen-image-2512", "fal-ai/qwen-image-edit-2511"]);
 const VIDEO_MODEL = "alibaba/wan-3.0/image-to-video";
 
 export async function POST(request) {
@@ -16,8 +16,8 @@ export async function POST(request) {
       return NextResponse.json({ error: "Invalid character, mode or prompt." }, { status: 400 });
     }
     if (!["fal", "gpu"].includes(provider)) return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
-    if (mode === "image" && provider === "fal" && !IMAGE_MODELS.has(model)) return NextResponse.json({ error: "Unsupported fal image model." }, { status: 400 });
-    if (mode === "image" && provider === "gpu" && model !== "selfhost/flux2-klein-4b") return NextResponse.json({ error: "Unsupported GPU image model." }, { status: 400 });
+    if (mode === "image" && provider === "fal" && !IMAGE_MODELS.has(model)) return NextResponse.json({ error: "Unsupported Qwen image model." }, { status: 400 });
+    if (mode === "image" && provider === "gpu" && model !== "selfhost/qwen-image-edit-2511-q4") return NextResponse.json({ error: "Unsupported GPU image model." }, { status: 400 });
     if (mode === "video" && provider === "gpu") return NextResponse.json({ error: "GPU video generation is not enabled in pilot." }, { status: 422 });
     if (mode === "video" && model !== VIDEO_MODEL) return NextResponse.json({ error: "Unsupported video model." }, { status: 400 });
     if (mode === "video" && !validExternalImage(referenceUrl)) return NextResponse.json({ error: "An HTTPS start-frame URL is required." }, { status: 400 });
@@ -33,6 +33,12 @@ export async function POST(request) {
         !["foreground_floor", "rear_floor", "sofa_seated"].includes(placement)) {
       return NextResponse.json({ error: "Unknown subject placement." }, { status: 422 });
     }
+    if (mode === "image" && provider === "gpu" && !Object.keys(privateRefs).length) {
+      return NextResponse.json({ error: "Qwen Image Edit needs an identity or scenery photo. Upload at least one private JPEG." }, { status: 422 });
+    }
+    if (mode === "image" && provider === "fal" && model === "fal-ai/qwen-image-edit-2511" && !validExternalImage(referenceUrl)) {
+      return NextResponse.json({ error: "Hosted Qwen Edit requires an HTTPS reference image URL." }, { status: 422 });
+    }
     if (provider === "fal" && Object.keys(privateRefs).length) {
       return NextResponse.json({ error: "Private reference uploads are available on the independent GPU only." }, { status: 422 });
     }
@@ -41,7 +47,9 @@ export async function POST(request) {
     if (mode === "video" && ![5, 10, 15].includes(duration)) return NextResponse.json({ error: "Unsupported duration." }, { status: 400 });
     if (provider === "fal") {
       const input = mode === "image"
-        ? { prompt, image_size: ratio, num_images: 1, enable_safety_checker: true }
+        ? model === "fal-ai/qwen-image-edit-2511"
+          ? { prompt, image_urls: [referenceUrl], image_size: ratio, num_images: 1, enable_safety_checker: true }
+          : { prompt, image_size: ratio, num_images: 1, enable_safety_checker: true }
         : { prompt, start_image_url: referenceUrl, resolution: "480p", aspect_ratio: ratios[ratio], duration, audio: false, enable_safety_checker: true };
       const response = await falRequest("https://queue.fal.run/" + model, { method: "POST", body: JSON.stringify(input) });
       if (!response.ok) return NextResponse.json(publicError(response.status, response.data), { status: response.status });
