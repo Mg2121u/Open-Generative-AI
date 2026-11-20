@@ -152,13 +152,12 @@ def test_salvage_sends_one_video_under_new_delivery_key(monkeypatch):
     monkeypatch.setattr(full_video.db,'get_step',lambda *a:None)
     monkeypatch.setattr(full_video.db,'reserve_one_shot',lambda *a:True)
     monkeypatch.setattr(full_video.db,'external_finished',lambda *a:True)
-    monkeypatch.setattr(full_video.storage,'presign',
-                        lambda key,ttl:'https://private.example/archived.mp4')
     sent=[]
-    monkeypatch.setattr(full_video.telegram,'telegram',
-                        lambda method,payload:sent.append((method,payload)) or {'message_id':42})
+    monkeypatch.setattr(full_video.telegram,'send_archived_video',
+                        lambda chat,key,**kw:sent.append((chat,key,kw)) or {'message_id':42})
     full_video._deliver_once(job,'archive.mp4',delivery_key='local_salvage_delivery',
                              caption='Recovered, no provider generation')
     assert len(sent)==1
-    assert sent[0][0]=='sendVideo'
-    assert sent[0][1]['caption']=='Recovered, no provider generation'
+    assert sent[0][0]==job['chat_id']
+    assert sent[0][1]=='archive.mp4'
+    assert sent[0][2]['caption']=='Recovered, no provider generation'
