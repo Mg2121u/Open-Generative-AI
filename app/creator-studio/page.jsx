@@ -15,8 +15,8 @@ const imageModels = [
 export default function CreatorStudioPage() {
   const [character, setCharacter] = useState("Nicole");
   const [mode, setMode] = useState("image");
-  const [provider, setProvider] = useState("fal");
-  const [model, setModel] = useState(imageModels[0].id);
+  const [provider, setProvider] = useState("gpu");
+  const [model, setModel] = useState("selfhost/qwen-image-edit-2511-q4");
   const [password, setPassword] = useState("");
   const [prompt, setPrompt] = useState("");
   const [referenceUrl, setReferenceUrl] = useState("");
