@@ -449,6 +449,52 @@ def approve_qa_review(job_id, owner_id, *, expected_step):
             (owner_id,expected_step,job_id,owner_id,expected_step)).fetchone()
 
 
+
+def auto_recover_finished_uploads():
+    """One-time local-only recovery of failed oversized final S3 uploads.
+
+    Recovery occurs only AFTER all paid model predictions are complete.
+    The checkpoint prevents indefinite reassembly on an undersized bucket.
+    It never clears provider steps or issues new external predictions.
+    """
+    from .full_video import RUN_KEY
+    owners=[int(x) for x in os.getenv('ALLOWED_TELEGRAM_USER_IDS','').split(',')
+            if x.strip().isdigit()]
+    if not owners:return []
+    pattern=f'wan_{RUN_KEY}_segment_%'
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs AS j
+            SET stage='FINAL_ASSEMBLE',state='QUEUED',attempt=0,
+                next_attempt_at=now(),lease_owner=NULL,lease_until=NULL,
+                last_error=NULL,
+                checkpoint=jsonb_set(COALESCE(j.checkpoint,'{}'::jsonb),
+                  '{final_recovery}',
+                  jsonb_build_object('auto_attempted',true,
+                    'reason','S3UploadFailedError',
+                    'queued_at',to_char(now() AT TIME ZONE 'UTC',
+                         'YYYY-MM-DD"T"HH24:MI:SS"Z"')),true),
+                updated_at=now()
+            WHERE j.owner_id=ANY(%s::bigint[]) AND j.character='NICOLE'
+              AND j.stage='AUTO_GENERATE'
+              AND j.state IN ('FAILED','NEEDS_REVIEW')
+              AND j.lease_owner IS NULL
+              AND (j.lease_until IS NULL OR j.lease_until<now())
+              AND j.last_error LIKE 'Processing stage failed: S3UploadFailedError%%'
+              AND COALESCE(j.checkpoint#>>'{final_recovery,auto_attempted}','false')!='true'
+              AND j.segment_total>0 AND j.original_key IS NOT NULL
+              AND j.checkpoint#>>'{local_preflight,source_key}'=j.original_key
+              AND j.checkpoint#>>'{identity,status}'='ready'
+              AND (SELECT count(*) FROM recreation_steps s
+                   WHERE s.job_id=j.job_id AND s.step_key LIKE %s
+                     AND s.state='COMPLETED'
+                     AND NULLIF(s.external_request_id,'') IS NOT NULL)=j.segment_total
+              AND NOT EXISTS (SELECT 1 FROM recreation_steps s
+                   WHERE s.job_id=j.job_id AND s.step_key LIKE %s
+                     AND s.state!='COMPLETED')
+            RETURNING j.job_id,j.segment_total""",
+            (owners,pattern,pattern)).fetchall()
+
+
 def queue_final_assembly(owner_id, job_prefix):
     """Owner-only local recovery after all paid Wan sections completed.
 
