@@ -121,6 +121,8 @@ def report(job):
     if scenery_ref.get('status')=='ready':
         if not quality_mode or not scenery_ref.get('scenery_image_key'):
             raise ValueError('Scenery image reference requires identity-lock generation mode')
+        if not quality.reset_identity_each_segment(job):
+            raise ValueError('Image-3 scenery requires canonical Nicole face reset on every segment')
     segments=(quality.quality_plan(source['duration']) if quality_mode
               else plan(source['duration'],reuse_first=_reusable_canary(job)))
     return {'source_duration':source['duration'],'segments':segments,'remaining_estimate_usd':estimate(segments),
@@ -480,30 +482,41 @@ def _run_segments(job,info,*,guard):
                 payload=wan_canary.payload_for(reference,source_media['width'],source_media['height'],[image])
                 payload['prompt']+=' Opening segment: establish Nicole from Image 1; follow Video 1 motion only.'
             if quality.enabled(job):
-                # Slot 1: Nicole original. Slot 2: her original facial crop.
-                # Optional last slot: SCENERY ONLY. No prior generated face.
+                # Photo scenery ALWAYS uses exactly three distinct references,
+                # in the same order on EVERY source-motion interval:
+                # Image 1 canonical Nicole+outfit, Image 2 same-person face
+                # crop, Image 3 the uploaded physical environment.
+                scene=quality.scene_reference(job)
+                uses_photo_scene=scene.get('status')=='ready'
+                if uses_photo_scene and last_key:
+                    raise provider.NeedsReview('Photo-scene generation cannot reuse a previous generated frame as Image 2')
                 has_face_anchor=False
-                if not last_key and os.getenv('RECREATION_FACE_QA_MODE','on').lower()!='off':
+                if not last_key and (uses_photo_scene or os.getenv('RECREATION_FACE_QA_MODE','on').lower()!='off'):
                     face_anchor=identity_qa.prepare_anchor(job)
                     payload['reference_images'].append(storage.presign(face_anchor,3600))
                     has_face_anchor=True
-                scene=quality.scene_reference(job)
                 scene_number=None
-                if scene.get('status')=='ready':
+                if uses_photo_scene:
                     scene_key=scene['scenery_image_key']
                     if not _stored(scene_key):
                         raise provider.NeedsReview('Scenery photo is not archived; paid request blocked')
-                    if len(payload['reference_images'])>=3:
-                        raise provider.NeedsReview('Model image slot limit reached; paid request blocked')
-                    scene_number=len(payload['reference_images'])+1
+                    if not has_face_anchor or len(payload['reference_images'])!=2:
+                        raise provider.NeedsReview('Both Nicole references are required before scenery Image 3')
                     payload['reference_images'].append(storage.presign(scene_key,3600))
+                    scene_number=3
+                    if len(payload['reference_images'])!=3:
+                        raise provider.NeedsReview('Wan photo-scene requires exactly 3 image references')
                 elif scene.get('status') in ('awaiting','pending','failed'):
                     raise provider.NeedsReview('Scenery photo not ready; paid request blocked')
-                # Enforce explicit separation of character and location.
                 payload['prompt']=quality.build_prompt(
                     job,chained=bool(last_key),scene_image_number=scene_number,
                     face_anchor_present=has_face_anchor)
                 payload['seed']=quality.fixed_seed(job)
+                if uses_photo_scene:
+                    payload['enable_prompt_expansion']=False
+                    payload['generate_audio']=False
+                    LOGGER.info('WAN_PHOTO_SCENE job=%s segment=%d reference_roles=nicole_face_body,nicole_face_closeup,scenery_photo motion=source_only',
+                                job_id[:8],idx)
             elif quality.scene_reference(job).get('status')=='ready':
                 raise provider.NeedsReview('Image-based scenery requires identity-lock mode')
             payload['duration']=seg['output_seconds']
@@ -525,10 +538,22 @@ def _run_segments(job,info,*,guard):
                             expected in unquote(urlsplit(refs[1]).path)))
             scene=quality.scene_reference(job)
             scenery_key=scene.get('scenery_image_key') if scene.get('status')=='ready' else None
-            scene_ok=(not scenery_key or bool(
-                len(refs)>=2 and scenery_key in unquote(urlsplit(refs[-1]).path)))
+            if scenery_key:
+                face_key=f'recreation/{job_id}/identity/nicole_face_closeup_v1.jpg'
+                scene_ok=(
+                    len(refs)==3 and identity_ok and
+                    face_key in unquote(urlsplit(refs[1]).path) and
+                    scenery_key in unquote(urlsplit(refs[2]).path) and
+                    submitted.get('reference_videos') is not None and
+                    len(submitted.get('reference_videos') or [])==1 and
+                    source_key(job_id,idx) in unquote(
+                        urlsplit(submitted['reference_videos'][0]).path) and
+                    submitted.get('generate_audio') is False
+                )
+            else:
+                scene_ok=True
             if not (identity_ok and continuity_ok and scene_ok):
-                raise provider.NeedsReview('Submitted segment lacks verified Nicole identity or expected chained-frame continuity inputs')
+                raise provider.NeedsReview('Saved Wan request does not match Nicole body, face, uploaded-scene and source-motion reference roles')
         if step['state'] in ('SUBMITTING','UNCERTAIN','FAILED'):
             raise provider.NeedsReview('Uncertain provider request; manual reconciliation required')
         if step['state']!='COMPLETED':
