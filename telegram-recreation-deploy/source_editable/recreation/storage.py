@@ -87,11 +87,13 @@ def store_provider_url(url, key, *, max_bytes=250_000_000):
     return key
 
 
-def store_telegram_identity(job_id, file_id):
-    """Download Nicole reference in private staging and re-encode as a clean JPEG.
+def store_telegram_reference_image(job_id, file_id, *, role):
+    """Download a private character or scenery reference as a clean JPEG.
 
     No image pixels, Telegram token, or presigned URL are logged or placed in Git.
     """
+    if role not in ('identity','scenery'):
+        raise ValueError('Unknown media reference role')
     import hashlib
     from PIL import Image, ImageOps, UnidentifiedImageError
     from .telegram import BOT_API_URL, BOT_TOKEN, telegram
@@ -101,10 +103,11 @@ def store_telegram_identity(job_id, file_id):
         raise RuntimeError('Telegram identity reference has no file path')
     if info.get('file_size',0)>10_000_000:
         raise ValueError('Identity image exceeds 10 MB')
-    key=f"recreation/{job_id}/identity/nicole_{hashlib.sha256(file_id.encode()).hexdigest()[:16]}.jpg"
+    name='nicole' if role=='identity' else 'scenery'
+    key=f"recreation/{job_id}/{role}/{name}_{hashlib.sha256(file_id.encode()).hexdigest()[:16]}.jpg"
     with tempfile.TemporaryDirectory() as td:
         raw=Path(td)/'reference_in'
-        clean=Path(td)/'nicole.jpg'
+        clean=Path(td)/'clean_reference.jpg'
         if Path(path).is_absolute():
             if not Path(path).is_file():
                 raise RuntimeError('Telegram local file missing')
@@ -135,3 +138,13 @@ def store_telegram_identity(job_id, file_id):
             im.save(clean,format='JPEG',quality=90,optimize=True)
         upload_key(key,clean,mime='image/jpeg')
     return key
+
+
+def store_telegram_identity(job_id,file_id):
+    """Backward-compatible Nicole-only reference archive."""
+    return store_telegram_reference_image(job_id,file_id,role='identity')
+
+
+def store_telegram_scenery(job_id,file_id):
+    """Never store a scene under Nicole's canonical identity key."""
+    return store_telegram_reference_image(job_id,file_id,role='scenery')
