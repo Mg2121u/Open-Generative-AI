@@ -89,58 +89,77 @@ def scene_reference(job):
 
 
 def scene_instruction(job, *, scene_image_number=None):
+    """Image 3 owns LOCATION, not character, wardrobe, or dance."""
     reference=scene_reference(job)
     status=reference.get('status')
     if status in ('awaiting','pending','failed'):
         raise ValueError('Scenery reference photo is not ready; finish image upload before generation')
     if status=='ready':
-        if not reference.get('scenery_image_key') or scene_image_number not in (2,3):
-            raise ValueError('Scenery image must be submitted in a separate reference slot')
-        requested=_clean(reference.get('description'))
-        more=(f' Additional environment details: {requested}. ' if requested else '')
+        if not reference.get('scenery_image_key') or scene_image_number!=3:
+            raise ValueError('An uploaded scenery photo MUST be Image 3 after two Nicole references')
+        details=_clean(reference.get('description'))
         return (
-            f'SCENERY REFERENCE: Image {scene_image_number} is the OWNER UPLOADED '
-            'SCENERY PHOTO, and is the authoritative reference for the '
-            'BACKGROUND/LOCATION ONLY: match its setting, architecture, layout, '
-            'furniture, ground, lighting, perspective, materials and colors. '
-            'Replace the setting from Video 1 completely, with the uploaded '
-            'location consistent across every frame. '
-            'Any people or faces in the scenery photo are irrelevant: never '
-            'copy or blend their face, body, hairstyle or outfit onto Nicole. '
-            'Image 1 alone defines Nicole and her appearance; the reference '
-            'face close-up (when present) only reinforces her face. '
-            'Video 1 supplies the choreography, body movements and camera timing '
-            'but NOT its original scenery. Never add the reference photo as a '
-            'visible flat overlay, frame, cutout or picture-in-picture. '
-            + more
+            'IMAGE 3 IS THE EXCLUSIVE ENVIRONMENT AND SCENERY AUTHORITY. '
+            'Generate a new, single realistic moving video SET INSIDE the exact '
+            'physical location depicted in Image 3. Reconstruct the same architecture, '
+            'surfaces, furniture and object placement, spatial layout, colors, '
+            'depth, horizon, ground plane, scale, weather and lighting direction. '
+            'Nicole must be physically present in that environment and dance there '
+            'naturally, grounded by plausible contact shadows and scene-relative '
+            'reflections, realistic occlusion, perspective, motion parallax and '
+            'matching illumination. As the camera moves with Video 1 timing, '
+            'reveal spatially coherent views of this same location, never a flat '
+            'stretched photo. Do not paste a foreground cutout onto a still picture. '
+            'Ignore and completely DISCARD the room, walls, floor, background, '
+            'furniture and lighting from Image 1, Image 2 and Video 1. '
+            'They are NOT scenery references. No frames may flash back to any '
+            'other room; no background dissolve, crossfade, double exposure, '
+            'green-screen halo, compositing outline or mixed environments. '
+            'Ignore people, faces and clothes present in Image 3: '
+            'it is BACKGROUND ONLY, never a character or outfit reference. '
+            + (f'Additional location details: {details}. ' if details else '')
         )
-    requested = _clean(job.get('scenery'))
+    requested=_clean(job.get('scenery'))
     if requested.lower() in SOURCE_SCENE:
         return (
             'SCENERY RULE: Keep the original background and lighting of Video 1. '
-            'The setting must remain stable across every frame.'
+            'The setting must remain stable across every frame. '
         )
     return (
-        'SCENERY OVERRIDE (higher priority than Video 1 background or Image 2 background): '
+        'SCENERY OVERRIDE (higher priority than Video 1 background): '
         f'The entire scene must be "{requested}". Replace the source location completely. '
-        'Keep one physically coherent, photorealistic location with consistent architecture, '
-        'ground plane, scale, lighting and perspective. Never retain the original source '
-        'landmarks or scenery. Do not switch backgrounds as the performer moves. '
+        'Keep one physically coherent, photorealistic location with consistent '
+        'architecture, ground plane, scale, lighting and perspective. Never retain '
+        'the original source landmarks or scenery. Do not switch backgrounds. '
     )
 
 
 def outfit_instruction(job):
-    requested = _clean(job.get('outfit'))
-    if requested.lower() in PHOTO_OUTFIT or 'reference photo' in requested.lower():
+    requested=_clean(job.get('outfit'))
+    normalized=requested.lower()
+    photo=scene_reference(job).get('status')=='ready'
+    # Source-wardrobe is the old default on draft creation. For an uploaded
+    # scenery PHOTO, the requested three-reference contract explicitly makes
+    # Nicole's Image 1 the outfit authority instead of the source dancer.
+    if photo and (normalized in SOURCE_OUTFIT or normalized in PHOTO_OUTFIT
+                  or 'reference photo' in normalized):
+        return (
+            'WARDROBE AUTHORITY = IMAGE 1 ONLY. Nicole wears exactly the outfit '
+            'shown on her canonical full-body reference photograph: identical '
+            'colors, fabric, fit, neckline, sleeves, skirt/pants, footwear, '
+            'accessories and hairstyle, continuously across every frame. '
+            'Neither Video 1 nor Image 3 may change her clothing. '
+        )
+    if normalized in PHOTO_OUTFIT or 'reference photo' in normalized:
         return (
             'CLOTHING RULE: Image 1 is the wardrobe authority. Precisely retain '
             'the reference photo outfit, garment shape, seams, colors and accessories '
             'on every frame. Do not borrow clothing from Video 1. '
         )
-    if requested.lower() in SOURCE_OUTFIT:
+    if normalized in SOURCE_OUTFIT:
         return (
             'CLOTHING RULE: Copy the complete wardrobe from Video 1, '
-            'but keep Nicole\'s face, hair and body from Image 1. '
+            "but keep Nicole's face, hair and body from Image 1. "
         )
     return (
         f'CLOTHING OVERRIDE: Nicole must wear "{requested}". '
@@ -152,6 +171,55 @@ def outfit_instruction(job):
 
 
 def build_prompt(job, *, chained=False, scene_image_number=None, face_anchor_present=True):
+    scene=scene_reference(job)
+    if scene.get('status')=='ready':
+        if chained or not face_anchor_present or scene_image_number!=3:
+            raise ValueError('Photo scenery requires canonical Nicole Image 1, face Image 2, scenery Image 3, and NO generated-frame chain')
+        clothing=outfit_instruction(job)
+        setting=scene_instruction(job,scene_image_number=3)
+        extra=_clean(job.get('instructions'),380)
+        return (
+            'WAN 3.0 REFERENCE-TO-VIDEO — STRICT INPUT ROLE CONTRACT. '
+            'IMAGE 1: Original canonical NICOLE FULL-BODY IDENTITY AND WARDROBE '
+            'REFERENCE. Recreate THIS SAME adult woman: face geometry, eyes, '
+            'nose, lips, jawline, skin, hair texture and color, body shape and '
+            'proportions. Her appearance and clothes remain exactly consistent. '
+            'Do NOT use Image 1 for the background or indoor room. '
+            'IMAGE 2: CLOSE-UP OF THE EXACT SAME NICOLE FACE CROPPED FROM IMAGE 1. '
+            'It reinforces facial geometry and identity ONLY. Ignore its '
+            'background and do not treat it as a second woman. '
+            'IMAGE 3: TARGET SCENERY PHOTO. It determines LOCATION/ENVIRONMENT '
+            'ONLY; not her face, hair, proportions or outfit. '
+            'VIDEO 1: ORIGINAL REFERENCE CLIP. Follow its choreography and '
+            'movement exactly: each dance move, direction, footwork, gestures, '
+            'timing, rhythm, pose trajectories, head turns, body orientation, '
+            'relative camera framing and camera-motion sequence. Video 1 is '
+            'NOT an identity, wardrobe, lighting, room, floor, furniture or '
+            'background reference. Completely replace its original performer '
+            'with Nicole from Image 1/2 and its environment with Image 3. '
+            + clothing + setting +
+            'OUTPUT: Generate a NEW unified photorealistic video OF NICOLE '
+            'performing the choreography IN the location depicted by Image 3. '
+            'No picture-in-picture, matte, static-photo backdrop, copy-paste, '
+            'silhouette, paper cutout, compositing, fake green screen or visible '
+            'subject/background edge. Align Nicole to the physical environment '
+            'with accurate scale, plausible scene-consistent shadows, reflected '
+            'light and natural feet-ground contact throughout. Every source '
+            'interval begins at its correct source motion pose; transitions '
+            'must not restart the dance or change the scene. Preserve the '
+            'same face, hairstyle, body and clothes in every frame. Keep '
+            'camera motion smooth, perspective and layout coherent, no room '
+            'flashing or source-background bleed. Maintain realistic anatomy, '
+            'no warping, ghosting, melting, duplicate limbs, stretched torso, '
+            'scene transitions, flicker, faces from other inputs or extra people. '
+            'No text, usernames, logos, stickers, subtitles or watermarks. '
+            'GENERATE NO AUDIO; original audio is restored locally after render. '
+            + (f'Additional owner direction: {extra}. ' if extra else '') +
+            'FINAL PRIORITY ORDER: Nicole identity AND outfit = IMAGE 1; '
+            'Nicole exact face = IMAGE 2; full environment ONLY = IMAGE 3; '
+            'dance movement and camera timing ONLY = VIDEO 1. '
+            'Never inherit the background from either Nicole image or Video 1.'
+        )
     motion = (
         'VIDEO 1 IS THE MOTION AND CAMERA TIMING AUTHORITY. Reproduce the source '
         'choreography pose by pose, including hand movements, steps, limb trajectories, '
