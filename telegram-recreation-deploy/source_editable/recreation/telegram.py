@@ -133,13 +133,29 @@ def process_message(message):
                     'then delivered privately. /status tracks the result.'
                 ))
             else:
-                say(chat,(
-                    'Local recovery is not yet eligible. It requires all paid '
-                    'sections archived, a verified source video, an S3 upload failure '
-                    'and no active worker lease. Use /status. '
-                    'If assembly is already RUNNING, the patched uploader may '
-                    'complete it automatically. No Wan generation was queued.'
-                ))
+                # Do not steal an active worker lease or cause two independent
+                # video deliveries. Register the owner's recovery preference
+                # on an active, fully-generated job and honor it if it fails.
+                pending=db.defer_final_assembly(owner,value.strip())
+                if pending:
+                    say(chat,(
+                        f'Job {str(pending["job_id"])[:8]} already has a worker '
+                        f'assembling its {pending["segment_total"]} completed '
+                        'Wan sections. Your /finish request is SAVED. '
+                        'If the current assembly succeeds it will deliver normally; '
+                        'if it fails, Studio will recover using LOCAL video tools '
+                        'without recharging or regenerating any section. '
+                        'Original audio and owner QA approvals remain preserved. '
+                        'No further command needed; check /status.'
+                    ))
+                else:
+                    say(chat,(
+                        'No recovery was queued. The job may be completed, '
+                        'already recovering, have pending/uncertain provider '
+                        'requests, or no longer match the saved source. '
+                        'Use /status for its current stage. '
+                        'No Wan generation was started by /finish.'
+                    ))
         except (ValueError,TypeError,KeyError) as exc:
             say(chat,'Archive recovery: '+str(exc)[:320])
         return
