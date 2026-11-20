@@ -155,6 +155,13 @@ def shutdown():
 def healthz():
     return {"status": "alive"}
 
+@app.get("/model-info")
+def model_info():
+    # A public, credential-free capability check used to prevent wrong-model
+    # generation after the Studio UI has been upgraded but Salad has not.
+    return {"engine": "qwen-image-edit-2511", "mode": "image-edit", "reference_required": True}
+
+
 @app.get("/readyz")
 def readyz():
     if not ready.is_set():

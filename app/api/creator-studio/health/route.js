@@ -25,7 +25,19 @@ export async function GET() {
       return false;
     }
   };
-  const [reachable, ready] = await Promise.all([probe("/healthz"), probe("/readyz")]);
-  return NextResponse.json({ reachable, ready, setup: "configured" },
+  const [reachable, modelReady, engineMatch] = await Promise.all([
+    probe("/healthz"), probe("/readyz"),
+    (async () => {
+      try {
+        const response = await fetch(base.replace(/\/$/, "") + "/model-info", {
+          cache: "no-store", signal: AbortSignal.timeout(6000)
+        });
+        const data = response.ok ? await response.json() : {};
+        return data?.engine === "qwen-image-edit-2511" && data?.mode === "image-edit";
+      } catch { return false; }
+    })()
+  ]);
+  return NextResponse.json({ reachable, ready: modelReady && engineMatch,
+    engine: engineMatch ? "qwen-image-edit-2511" : "not_qwen_worker", setup: "configured" },
     { headers: { "Cache-Control": "no-store" } });
 }

@@ -76,6 +76,18 @@ export async function POST(request) {
         ? "Salad server is online, but Qwen model initialization is not complete or failed. Check the latest Salad Container Logs before generating."
         : "Salad GPU is not ready (health status " + health.status + ")." }, { status: 503 });
     }
+    let modelInfo;
+    try {
+      const response = await fetch(endpoint.replace(/\/$/, "") + "/model-info", {
+        method: "GET", cache: "no-store", signal: AbortSignal.timeout(6000)
+      });
+      modelInfo = response.ok ? await response.json() : {};
+    } catch {
+      modelInfo = {};
+    }
+    if (modelInfo?.engine !== "qwen-image-edit-2511" || modelInfo?.mode !== "image-edit") {
+      return NextResponse.json({ error: "Salad still runs the previous Docker image. Install the verified Qwen-Image-Edit-2511 image before submitting jobs." }, { status: 503 });
+    }
     const result = await fetch(endpoint.replace(/\/$/, "") + "/jobs", {
       method: "POST", headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify({ character, mode, prompt, reference_image_url: null, reference_images: privateRefs, placement: placement || "foreground_floor", aspect_ratio: ratios[ratio], duration: mode === "video" ? duration : undefined }),

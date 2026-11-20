@@ -201,3 +201,9 @@ def test_qwen_worker_refuses_unconditioned_generation():
         r = client.post("/jobs", headers=headers, json={"character":"Nicole", "prompt":"Portrait"})
         assert r.status_code == 422
         assert "reference" in r.json()["detail"].lower()
+
+def test_qwen_model_info_identifies_running_engine():
+    with TestClient(worker.app) as client:
+        response = client.get("/model-info")
+        assert response.status_code == 200
+        assert response.json() == {"engine":"qwen-image-edit-2511","mode":"image-edit","reference_required":True}
