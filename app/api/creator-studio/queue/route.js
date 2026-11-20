@@ -1,10 +1,30 @@
 import { NextResponse } from "next/server";
 import { authenticate, falRequest, publicError, validExternalImage } from "../../../../lib/creator-studio/server";
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const IMAGE_MODELS = new Set(["fal-ai/qwen-image-2512", "fal-ai/qwen-image-edit-2511"]);
 const VIDEO_MODEL = "alibaba/wan-3.0/image-to-video";
+const WAN_EDIT_MODEL = "alibaba/wan-2.5/image-edit";
+const WAVESPEED_BASE = "https://api.wavespeed.ai/api/v3";
+const WAVESPEED_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+async function uploadWanReference(dataUri, role, apiKey) {
+  const bytes = Buffer.from(dataUri.split(",")[1], "base64");
+  if (!bytes.length || bytes.length > 1_350_000) throw new Error("Reference exceeds 1.35 MB.");
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type: "image/jpeg" }), role + ".jpg");
+  const response = await fetch(WAVESPEED_BASE + "/media/upload/binary", {
+    method: "POST", headers: { Authorization: "Bearer " + apiKey },
+    body: form, signal: AbortSignal.timeout(15000)
+  });
+  const result = await response.json().catch(() => ({}));
+  const url = result?.data?.download_url || result?.data?.url;
+  if (!response.ok || result.code !== 200 || typeof url !== "string" || !url.startsWith("https://")) {
+    throw new Error("WaveSpeed reference upload failed (HTTP " + response.status + ").");
+  }
+  return url;
+}
 
 export async function POST(request) {
   const auth = authenticate(request);
@@ -15,9 +35,10 @@ export async function POST(request) {
     if (!["Aria", "Nicole"].includes(character) || !["image", "video"].includes(mode) || typeof prompt !== "string" || prompt.length > 4000) {
       return NextResponse.json({ error: "Invalid character, mode or prompt." }, { status: 400 });
     }
-    if (!["fal", "gpu"].includes(provider)) return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
+    if (!["fal", "gpu", "wavespeed"].includes(provider)) return NextResponse.json({ error: "Unknown provider." }, { status: 400 });
     if (mode === "image" && provider === "fal" && !IMAGE_MODELS.has(model)) return NextResponse.json({ error: "Unsupported Qwen image model." }, { status: 400 });
     if (mode === "image" && provider === "gpu" && model !== "selfhost/qwen-image-edit-2511-q4") return NextResponse.json({ error: "Unsupported GPU image model." }, { status: 400 });
+    if (provider === "wavespeed" && (mode !== "image" || model !== WAN_EDIT_MODEL)) return NextResponse.json({ error: "WaveSpeed Wan 2.5 Edit supports image editing only." }, { status: 422 });
     if (mode === "video" && provider === "gpu") return NextResponse.json({ error: "GPU video generation is not enabled in pilot." }, { status: 422 });
     if (mode === "video" && model !== VIDEO_MODEL) return NextResponse.json({ error: "Unsupported video model." }, { status: 400 });
     if (mode === "video" && !validExternalImage(referenceUrl)) return NextResponse.json({ error: "An HTTPS start-frame URL is required." }, { status: 400 });
@@ -29,12 +50,12 @@ export async function POST(request) {
             !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(value) || value.length > 1_850_000)) {
       return NextResponse.json({ error: "Invalid reference upload. Use up to two compact JPEG images." }, { status: 422 });
     }
-    if (provider === "gpu" && placement !== undefined &&
+    if ((provider === "gpu" || provider === "wavespeed") && placement !== undefined &&
         !["foreground_floor", "rear_floor", "sofa_seated"].includes(placement)) {
       return NextResponse.json({ error: "Unknown subject placement." }, { status: 422 });
     }
-    if (mode === "image" && provider === "gpu" && !Object.keys(privateRefs).length) {
-      return NextResponse.json({ error: "Qwen Image Edit needs an identity or scenery photo. Upload at least one private JPEG." }, { status: 422 });
+    if (mode === "image" && (provider === "gpu" || provider === "wavespeed") && !Object.keys(privateRefs).length) {
+      return NextResponse.json({ error: "Image editing needs at least one identity or scenery photo." }, { status: 422 });
     }
     if (mode === "image" && provider === "fal" && model === "fal-ai/qwen-image-edit-2511" && !validExternalImage(referenceUrl)) {
       return NextResponse.json({ error: "Hosted Qwen Edit requires an HTTPS reference image URL." }, { status: 422 });
@@ -45,6 +66,45 @@ export async function POST(request) {
     const ratios = { portrait_16_9: "9:16", square_hd: "1:1", landscape_16_9: "16:9" };
     if (!(ratio in ratios)) return NextResponse.json({ error: "Invalid aspect ratio." }, { status: 400 });
     if (mode === "video" && ![5, 10, 15].includes(duration)) return NextResponse.json({ error: "Unsupported duration." }, { status: 400 });
+    if (provider === "wavespeed") {
+      const apiKey = process.env.WAVESPEED_API_KEY;
+      if (!apiKey) return NextResponse.json({ error: "WaveSpeed API key is not configured on the Studio preview branch." }, { status: 503 });
+      const roles = ["identity", "scenery"].filter((role) => !!privateRefs[role]);
+      const inputImages = [];
+      try {
+        for (const role of roles) inputImages.push(await uploadWanReference(privateRefs[role], role, apiKey));
+      } catch (error) {
+        return NextResponse.json({ error: error.message || "Could not upload reference to WaveSpeedAI." }, { status: 502 });
+      }
+      const roleGuidance = roles.length === 2
+        ? "Image 1 shows the character to preserve. Image 2 is the scenery and camera perspective to preserve. Place the character on the actual floor, at natural human scale, with realistic leg proportions, floor contact and correct furniture occlusion. "
+        : roles[0] === "identity" ? "Image 1 is the character identity reference. Preserve realistic facial identity, natural body proportions and anatomy. "
+          : "Image 1 is the scenery reference. Preserve the camera angle and architecture. ";
+      const place = placement === "sofa_seated" ? "Seat the character naturally on the sofa. " :
+        placement === "rear_floor" ? "Place the character on the rear floor behind the furniture. " :
+        "Place the character on the visible foreground floor, not on the coffee table. ";
+      const sizes = { portrait_16_9: "720*1280", square_hd: "1024*1024", landscape_16_9: "1280*720" };
+      let response;
+      try {
+        response = await fetch(WAVESPEED_BASE + "/alibaba/wan-2.5/image-edit", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: roleGuidance + (roles.length === 2 ? place : "") + prompt,
+            images: inputImages, size: sizes[ratio], seed: -1 }),
+          signal: AbortSignal.timeout(22000)
+        });
+      } catch {
+        return NextResponse.json({ error: "Wan submission outcome is uncertain; check WaveSpeed History before retrying to avoid duplicate charges." }, { status: 502 });
+      }
+      const result = await response.json().catch(() => ({}));
+      const task = result?.data || result;
+      if (!response.ok || !WAVESPEED_ID.test(String(task.id || ""))) {
+        const detail = response.ok ? "Provider did not return a valid task ID." :
+          "Wan submission returned HTTP " + response.status + ".";
+        return NextResponse.json({ error: detail + (response.status >= 500 ? " Check WaveSpeed History before trying again." : "") }, { status: response.status || 502 });
+      }
+      return NextResponse.json({ id: task.id, provider: "wavespeed" });
+    }
     if (provider === "fal") {
       const input = mode === "image"
         ? model === "fal-ai/qwen-image-edit-2511"

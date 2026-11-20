@@ -28,6 +28,42 @@ export async function POST(request) {
       if (!result.ok) return NextResponse.json(publicError(result.status, result.data), { status: result.status });
       return NextResponse.json({ status: "COMPLETED", assets: assetsFromResult(result.data) });
     }
+    if (body.provider === "wavespeed") {
+      const apiKey = process.env.WAVESPEED_API_KEY;
+      if (!apiKey) return NextResponse.json({ error: "WaveSpeed API key is not configured." }, { status: 503 });
+      if (typeof body.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.id)) {
+        return NextResponse.json({ error: "Invalid WaveSpeed job ID." }, { status: 400 });
+      }
+      let response;
+      try {
+        response = await fetch("https://api.wavespeed.ai/api/v3/predictions/" +
+          encodeURIComponent(body.id) + "/result", {
+          headers: { Authorization: "Bearer " + apiKey },
+          cache: "no-store", signal: AbortSignal.timeout(12000)
+        });
+      } catch {
+        return NextResponse.json({ status: "RECOVERING", error: "WaveSpeed status is temporarily unreachable. Checking the same job without resubmitting." });
+      }
+      if ([429, 502, 503, 504].includes(response.status)) {
+        return NextResponse.json({ status: "RECOVERING", error: "WaveSpeed status temporarily unavailable (HTTP " + response.status + "). No job resubmitted." });
+      }
+      const bodyJson = await response.json().catch(() => ({}));
+      const result = bodyJson?.data || bodyJson;
+      if (!response.ok || (typeof bodyJson.code === "number" && bodyJson.code !== 200)) {
+        return NextResponse.json({ error: "WaveSpeed status error (HTTP " + response.status + ")." }, { status: response.status || 502 });
+      }
+      const observed = String(result.status || "").toLowerCase();
+      if (observed === "completed") {
+        const assets = (Array.isArray(result.outputs) ? result.outputs : [])
+          .map((asset) => typeof asset === "string" ? asset : asset?.url)
+          .filter((asset) => typeof asset === "string" && asset.startsWith("https://"));
+        return NextResponse.json({ status: "COMPLETED", assets });
+      }
+      if (["failed", "cancelled", "timeout", "deleted"].includes(observed)) {
+        return NextResponse.json({ status: "ERROR", error: "Wan edit " + observed + (result.error ? ": " + String(result.error).slice(0, 200) : ".") });
+      }
+      return NextResponse.json({ status: observed === "processing" ? "IN_PROGRESS" : "IN_QUEUE" });
+    }
     if (body.provider === "gpu") {
       const endpoint = process.env.PRIVATE_GPU_ENDPOINT;
       const token = process.env.PRIVATE_GPU_TOKEN;
