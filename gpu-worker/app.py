@@ -1,5 +1,7 @@
-"""Salad image worker. One GPU/one replica; jobs and assets persist to private S3."""
+"""Salad image worker: persistent private S3 or ephemeral one-replica pilot."""
 import io
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -7,10 +9,13 @@ import secrets
 import threading
 import time
 import uuid
+from urllib.parse import urlencode
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException, Request
+from fastapi.responses import Response
+from local_store import EphemeralStore
 from pydantic import BaseModel, Field
 
 log = logging.getLogger("salad-worker")
@@ -56,7 +61,7 @@ def read_job(job_id):
         raw = s3.get_object(Bucket=BUCKET, Key=job_key(job_id))
         return json.loads(raw["Body"].read().decode())
     except Exception as e:
-        if getattr(e, "response", {}).get("Error", {}).get("Code") in ("404", "NoSuchKey"):
+        if isinstance(e, FileNotFoundError) or getattr(e, "response", {}).get("Error", {}).get("Code") in ("404", "NoSuchKey"):
             return None
         raise
 
@@ -72,13 +77,19 @@ def init():
     try:
         if os.getenv("MOCK_INFERENCE") == "1" and os.getenv("ENVIRONMENT") != "test":
             raise RuntimeError("Mock inference is not permitted in production")
-        import boto3
-        if not BUCKET or not os.getenv("S3_ENDPOINT", "").startswith("https://"):
-            raise RuntimeError("Private S3 storage is not configured")
-        s3 = boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT"],
-            aws_access_key_id=os.environ["S3_ACCESS_KEY"],
-            aws_secret_access_key=os.environ["S3_SECRET_KEY"],
-            region_name=os.getenv("S3_REGION", "auto"))
+        if os.getenv("STORAGE_DRIVER") == "ephemeral":
+            if os.getenv("MAX_REPLICAS", "1") != "1":
+                raise RuntimeError("Ephemeral output requires exactly one replica")
+            s3 = EphemeralStore()
+            log.warning("Ephemeral pilot storage: images/jobs are lost on container replacement")
+        else:
+            import boto3
+            if not BUCKET or not os.getenv("S3_ENDPOINT", "").startswith("https://"):
+                raise RuntimeError("Private S3 storage is not configured")
+            s3 = boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT"],
+                aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+                aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+                region_name=os.getenv("S3_REGION", "auto"))
         if os.getenv("MOCK_INFERENCE") == "1":
             model = "mock"
         else:
@@ -157,7 +168,7 @@ def create_job(payload: Job):
         queue_depth += 1
     job_id = uuid.uuid4().hex
     try:
-        write_job(job_id, {"id":job_id, "status":"IN_QUEUE", "created_at":utcnow(),
+        write_job(job_id, {"id":job_id, "character":payload.character, "status":"IN_QUEUE", "created_at":utcnow(),
                            "updated_at":utcnow(), "assets_keys":[], "error":None})
         pool.submit(render, job_id, payload)
     except Exception:
@@ -166,8 +177,50 @@ def create_job(payload: Job):
         raise HTTPException(503, "Unable to save job")
     return {"id":job_id}
 
+def signed_asset_url(request: Request, job_id: str) -> str:
+    token = os.getenv("WORKER_API_TOKEN", "")
+    expiry = int(time.time()) + 900
+    msg = f"{job_id}:{expiry}".encode("utf-8")
+    signature = hmac.new(token.encode(), msg, hashlib.sha256).hexdigest()
+    # No extra PUBLIC_URL variable required: use the official Salad HTTPS gateway
+    # host observed on the authenticated status request.
+    hostname = request.headers.get("host", "")
+    if not hostname or len(hostname) > 255 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.:"
+                                                  for c in hostname):
+        raise HTTPException(500, "Invalid public gateway hostname")
+    return f"https://{hostname}/assets/{job_id}.png?" + urlencode({"expires": expiry, "sig": signature})
+
+
+@app.get("/assets/{job_id}.png")
+def get_ephemeral_asset(job_id: str, expires: int, sig: str):
+    if not isinstance(s3, EphemeralStore):
+        raise HTTPException(404, "Not found")
+    if len(job_id) != 32 or any(c not in "0123456789abcdef" for c in job_id):
+        raise HTTPException(404, "Not found")
+    if expires < int(time.time()) or expires > int(time.time()) + 3600:
+        raise HTTPException(403, "Signed link expired")
+    if len(sig) != 64:
+        raise HTTPException(403, "Invalid signed link")
+    mac = hmac.new(os.getenv("WORKER_API_TOKEN", "").encode(),
+                   f"{job_id}:{expires}".encode(), hashlib.sha256).hexdigest()
+    if not secrets.compare_digest(mac, sig):
+        raise HTTPException(403, "Invalid signed link")
+    record = read_job(job_id)
+    if not record or record.get("status") != "COMPLETED":
+        raise HTTPException(404, "Not found")
+    keys = record.get("assets_keys", [])
+    if len(keys) != 1:
+        raise HTTPException(404, "Not found")
+    try:
+        body = s3.get_object(Bucket=BUCKET, Key=keys[0])["Body"].read()
+    except FileNotFoundError:
+        raise HTTPException(404, "Not found")
+    return Response(content=body, media_type="image/png",
+                    headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
 @app.get("/jobs/{job_id}", dependencies=[Depends(authorize)])
-def status(job_id: str):
+def status(job_id: str, request: Request):
     if len(job_id) != 32 or any(c not in "0123456789abcdef" for c in job_id):
         raise HTTPException(400, "Invalid job ID")
     if s3 is None:
@@ -183,7 +236,12 @@ def status(job_id: str):
                 return {"status":"ERROR", "assets":[], "error":"Worker interrupted; job expired"}
         except (TypeError, ValueError):
             pass
-    urls = [s3.generate_presigned_url("get_object",
-             Params={"Bucket":BUCKET, "Key":k}, ExpiresIn=900)
-            for k in record.get("assets_keys", [])] if state == "COMPLETED" else []
+    urls = []
+    if state == "COMPLETED":
+        if isinstance(s3, EphemeralStore):
+            urls = [signed_asset_url(request, job_id)] if record.get("assets_keys") else []
+        else:
+            urls = [s3.generate_presigned_url("get_object",
+                Params={"Bucket":BUCKET, "Key":k}, ExpiresIn=900)
+                for k in record.get("assets_keys", [])]
     return {"status":state, "assets":urls, "error":record.get("error")}
