@@ -62,7 +62,12 @@ def show(job):
         + (f'Issue: {job["last_error"][:400]}' if job['last_error'] else '')
         + ('\\nQA: owner accepted a failed face match (NOT verified)' if
            ((job.get('checkpoint') or {}).get('quality_override') or {}).get('type')=='owner_accepted_facial_mismatch'
-           else ''))
+           else '')
+        + (f'\\nQA: {len((job.get("checkpoint") or {}).get("face_qa_approvals") or {})} section(s) owner accepted as imperfect (not verified)' if
+            (job.get('checkpoint') or {}).get('face_qa_approvals') else '')
+        + (f'\\nReview commands: /review_qa {str(job["job_id"])[:8]} then /approve_qa {str(job["job_id"])[:8]}' if
+           job.get('state')=='NEEDS_REVIEW' and
+           str(job.get('last_error') or '').startswith('Nicole facial identity QA ') else ''))
 
 
 def _image_attachment(message, *, allow_reply=False):
@@ -94,7 +99,7 @@ def process_message(message):
     if not ALLOWED_USERS or int(owner) not in ALLOWED_USERS:
         say(chat,'This app is private. Send /id to retrieve your ID for access.'); return
     if cmd in ('/start','/help'):
-        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description> or photo with caption /scenery or reply /scenery to photo\n/scenery — arm the NEXT photo as a scenery reference\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept mismatched face and deliver, no Wan cost\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
+        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description> or photo with caption /scenery or reply /scenery to photo\n/scenery — arm the NEXT photo as a scenery reference\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept archived face-QA mismatch; continue remaining sections (paid) or deliver one\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
         return
     if cmd=='/new':
         job=db.create_draft(chat,owner)
@@ -122,7 +127,42 @@ def process_message(message):
         try:
             review=db.qa_review_job(owner,prefix)
             if not review:
-                say(chat,'No matching one-section Nicole face-mismatch review job was found. Check the exact 8-character job ID in /status.')
+                say(chat,'No matching paused Nicole face-QA job was found. Check the exact 8-character job ID in /status. Provider or submission errors cannot be overridden.')
+                return
+            if int(review.get('segment_total') or 0)>1:
+                from . import qa_continue
+                info=qa_continue.reviewable(review)
+                if cmd=='/review_qa':
+                    ratio=(f'{info["matched"]}/{info["detected"]}' if
+                           info.get('detected') is not None else 'unverified')
+                    cost=info['remaining_estimated_usd']
+                    telegram('sendVideo',{'chat_id':chat,
+                        'video':full_video.storage.presign(info['key'],3600),
+                        'caption':(
+                            f'PAUSED QA REVIEW {prefix} | section {info["number"]}/{info["total"]}. '
+                            f'Nicole face check {info["status"]} ({ratio}). This paid clip is archived. '
+                            f'Next sections: {info["remaining_count"]}, estimated additional Wan cost '
+                            f'${cost:.2f} (actual provider billing may differ). '
+                            f'Accept this imperfect section and RESUME remaining paid sections: '
+                            f'/approve_qa {prefix}. No existing section will be regenerated.'
+                        )})
+                    return
+                queued=db.approve_qa_continue(
+                    review['job_id'],owner,index=info['index'],
+                    expected_step=info['source_step'],expected_key=info['key'],
+                    qa_status=info['status'])
+                if queued:
+                    say(chat,(
+                        f'Approved archived section {info["number"]}/{info["total"]} for job {prefix}. '
+                        'The original failed-face QA evidence remains recorded; it is NOT a pass. '
+                        f'Resuming {info["remaining_count"]} remaining sections (estimated '
+                        f'additional Wan cost ${info["remaining_estimated_usd"]:.2f}, actual billing may differ). '
+                        'Completed provider IDs are preserved; no previously paid section is regenerated. '
+                        'Another face mismatch may still pause for your approval. /status tracks progress.'
+                    ))
+                else:
+                    say(chat,'Approval not queued. The job has changed or has an ambiguous provider request. '
+                        'No additional Wan request was authorized; use /status.')
                 return
             job_id=str(review['job_id'])
             clip=full_video.segment_key(job_id,0)
