@@ -1,16 +1,7 @@
 name: Verify SaladCloud Organization (read-only)
+# DISABLED BY DEFAULT: this REST credential is currently rejected (401).
+# Portal-based deployment is supported; do not automatically repeat failed key checks.
 on:
-  push:
-    branches:
-      - feature/aria-nicole-creator-studio
-    paths:
-      - ".github/workflows/salad-connect-check.yml"
-      - "gpu-worker/salad_preflight.py"
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - ".github/workflows/salad-connect-check.yml"
-      - "gpu-worker/salad_preflight.py"
   workflow_dispatch:
 
 permissions:
@@ -26,5 +17,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify authenticated read-only Salad API access
-        id: preflight
         run: python3 gpu-worker/salad_preflight.py

@@ -75,6 +75,10 @@ def update_job(job_id, patch):
 def init():
     global s3, model
     try:
+        # TestClient injects storage/model; never replace them in mock unit tests.
+        if os.getenv("ENVIRONMENT") == "test" and os.getenv("MOCK_INFERENCE") == "1" and model == "mock" and s3 is not None:
+            ready.set()
+            return
         if os.getenv("MOCK_INFERENCE") == "1" and os.getenv("ENVIRONMENT") != "test":
             raise RuntimeError("Mock inference is not permitted in production")
         if os.getenv("STORAGE_DRIVER") == "ephemeral":
