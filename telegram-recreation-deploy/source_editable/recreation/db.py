@@ -61,6 +61,9 @@ def create_redo_from_latest(chat_id, owner_id):
         if not previous:
             return None
         cp = {'identity': previous['checkpoint']['identity']}
+        scene=(previous.get('checkpoint') or {}).get('scenery_reference') or {}
+        if scene.get('status')=='ready' and scene.get('scenery_image_key'):
+            cp['scenery_reference']=scene
         prior_preflight=(previous['checkpoint'] or {}).get('local_preflight') or {}
         if (prior_preflight.get('complete')
                 and prior_preflight.get('source_key') == previous['original_key']):
@@ -143,6 +146,9 @@ def create_segment_revision(chat_id,owner_id,parent_prefix,section_number):
                 'revision_version':1
             }
         }
+        parent_scene=(original.get('checkpoint') or {}).get('scenery_reference') or {}
+        if parent_scene.get('status')=='ready' and parent_scene.get('scenery_image_key'):
+            cp['scenery_reference']=parent_scene
         conn.execute("""INSERT INTO recreation_jobs
             (job_id,chat_id,owner_id,character,model,source_file_id,
              original_key,scenery,outfit,instructions,voiceover_voice,
@@ -169,6 +175,7 @@ def queue_segment_revision(job_id,owner_id):
             WHERE job_id=%s AND owner_id=%s AND state='DRAFT'
               AND stage='SEGMENT_REDO'
               AND checkpoint#>>'{segment_revision,parent_job_id}' IS NOT NULL
+              AND COALESCE(checkpoint#>>'{scenery_reference,status}','ready')='ready'
             RETURNING job_id""",(job_id,owner_id)).fetchone()
 
 def get_job(job_id, owner_id=None):
@@ -195,13 +202,77 @@ def draft_update(job_id, owner_id, column, value):
     with connect() as conn:
         if column == 'source_file_id':
             # Replacing the draft video invalidates any previous archive pointer.
-            return conn.execute("""UPDATE recreation_jobs SET source_file_id=%s,original_key=NULL,checkpoint=jsonb_build_object('identity', COALESCE(checkpoint->'identity','{}'::jsonb)),outputs='[]'::jsonb,segment_total=0,current_segment=0,stage='UPLOAD',updated_at=now()
+            return conn.execute("""UPDATE recreation_jobs SET source_file_id=%s,original_key=NULL,checkpoint=jsonb_build_object('identity', COALESCE(checkpoint->'identity','{}'::jsonb), 'scenery_reference', COALESCE(checkpoint->'scenery_reference','{}'::jsonb)),outputs='[]'::jsonb,segment_total=0,current_segment=0,stage='UPLOAD',updated_at=now()
               WHERE job_id=%s AND owner_id=%s AND state='DRAFT' RETURNING *""",
                 (value, job_id, owner_id)).fetchone()
+        if column=='scenery':
+            # Switching back to a text description disables the old photo.
+            return conn.execute("""UPDATE recreation_jobs
+                SET scenery=%s,checkpoint=COALESCE(checkpoint,'{}'::jsonb)-'scenery_reference',
+                    updated_at=now()
+                WHERE job_id=%s AND owner_id=%s AND state='DRAFT' RETURNING *""",
+                (value,job_id,owner_id)).fetchone()
         return conn.execute(f'UPDATE recreation_jobs SET {column}=%s,updated_at=now() WHERE job_id=%s AND owner_id=%s AND state=%s RETURNING *',
                             (value, job_id, owner_id, 'DRAFT')).fetchone()
 
 
+
+
+def await_scenery_image(job_id,owner_id):
+    """User sent /scenery alone: arm the next photo without paid work."""
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs
+            SET checkpoint=jsonb_set(COALESCE(checkpoint,'{}'::jsonb),
+                '{scenery_reference}',jsonb_build_object('status','awaiting'),true),
+                scenery='use scenery reference image',updated_at=now()
+            WHERE job_id=%s AND owner_id=%s AND state='DRAFT' RETURNING job_id""",
+            (job_id,owner_id)).fetchone()
+
+
+def record_scenery_image(job_id,owner_id,file_id,description=''):
+    """Durably reserve private scene photo before downloading from Telegram."""
+    if not file_id or len(file_id)>1024:
+        raise ValueError('Invalid Telegram scenery image reference')
+    description=' '.join(str(description or '').split())[:260]
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs
+            SET checkpoint=jsonb_set(COALESCE(checkpoint,'{}'::jsonb),
+                '{scenery_reference}',jsonb_build_object(
+                   'file_id',%s::text,'status','pending','description',%s::text),true),
+                scenery='use scenery reference image',updated_at=now()
+            WHERE job_id=%s AND owner_id=%s AND state='DRAFT'
+            RETURNING job_id""",(file_id,description,job_id,owner_id)).fetchone()
+
+
+def mark_scenery_ready(job_id,file_id,key):
+    """A later photo supersedes an older pending download atomically."""
+    with connect() as conn:
+        row=conn.execute("""UPDATE recreation_jobs
+            SET checkpoint=jsonb_set(checkpoint,'{scenery_reference}',
+                COALESCE(checkpoint->'scenery_reference','{}'::jsonb)
+                || jsonb_build_object('status','ready','scenery_image_key',%s::text),
+                true),
+                updated_at=now()
+            WHERE job_id=%s AND state='DRAFT'
+              AND checkpoint#>>'{scenery_reference,status}'='pending'
+              AND checkpoint#>>'{scenery_reference,file_id}'=%s
+            RETURNING job_id""",(key,job_id,file_id)).fetchone()
+        if row:
+            conn.execute("""INSERT INTO recreation_events(job_id,kind,description)
+                 VALUES (%s,'scenery_saved','Private scenery reference image archived (not a person identity source)')""",
+                 (job_id,))
+        return row
+
+
+def mark_scenery_failed(job_id,file_id):
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs
+            SET checkpoint=jsonb_set(checkpoint,'{scenery_reference,status}',
+                '"failed"'::jsonb,true),updated_at=now()
+            WHERE job_id=%s AND state='DRAFT'
+              AND checkpoint#>>'{scenery_reference,status}'='pending'
+              AND checkpoint#>>'{scenery_reference,file_id}'=%s
+            RETURNING job_id""",(job_id,file_id)).fetchone()
 
 def record_identity_image(job_id, owner_id, file_id):
     """Persist a pending Nicole reference before doing any network I/O."""
@@ -242,7 +313,9 @@ def mark_identity_failed(job_id,file_id):
 def queue_job(job_id, owner_id):
     with connect() as conn:
         return conn.execute('''UPDATE recreation_jobs SET state='QUEUED',stage=CASE WHEN original_key IS NULL THEN 'INGEST' ELSE 'UPLOAD_REFERENCE' END,next_attempt_at=now(),updated_at=now()
-            WHERE job_id=%s AND owner_id=%s AND state='DRAFT' AND source_file_id IS NOT NULL RETURNING *''',
+            WHERE job_id=%s AND owner_id=%s AND state='DRAFT' AND source_file_id IS NOT NULL
+              AND COALESCE(checkpoint#>>'{scenery_reference,status}','ready')='ready'
+              RETURNING *''',
             (job_id,owner_id)).fetchone()
 
 
