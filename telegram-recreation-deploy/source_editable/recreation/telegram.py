@@ -87,7 +87,7 @@ def show(job):
             saved=conn.execute("""SELECT count(*) AS n FROM recreation_steps
                 WHERE job_id=%s AND step_key='wan_individual_section_revision_v1'
                   AND state='COMPLETED'""",(job['job_id'],)).fetchone()['n']
-    elif job['stage'] in ('AUTO_GENERATE','QA_OWNER_APPROVED','DONE'):
+    elif job['stage'] in ('AUTO_GENERATE','QA_OWNER_APPROVED','ARCHIVE_DELIVER','FINAL_ASSEMBLE','DONE'):
         from .full_video import RUN_KEY
         with db.connect() as conn:
             saved=conn.execute('SELECT count(*) AS n FROM recreation_steps WHERE job_id=%s AND step_key LIKE %s AND state=%s',
