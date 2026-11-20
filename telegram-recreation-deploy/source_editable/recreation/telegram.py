@@ -31,6 +31,50 @@ def telegram(method,payload):
     return data.get('result')
 
 
+
+def send_archived_video(chat_id, storage_key, *, caption=None):
+    """Upload private archived MP4 bytes using multipart, never as a URL.
+
+    Telegram's cloud Bot API has a 50MB limit for multipart sendVideo and
+    lower restrictions when fetching an HTTP URL. The final archive is
+    already size-bounded by the local exporter. NO Wan requests occur here.
+    """
+    from pathlib import Path
+    import tempfile
+    from . import storage
+    if not BOT_TOKEN:
+        raise RuntimeError('TELEGRAM_BOT_TOKEN is not configured')
+    with tempfile.TemporaryDirectory() as tmp:
+        video=Path(tmp)/'Nicole-Recreation.mp4'
+        storage.download_key(storage_key,video)
+        size=video.stat().st_size
+        if size<4096 or size>49_000_000:
+            raise ValueError('Archived video must be nonempty and under the cloud Bot API multipart limit')
+        with video.open('rb') as body:
+            try:
+                response=requests.post(
+                    f'{BOT_API_URL}/bot{BOT_TOKEN}/sendVideo',
+                    data={'chat_id':str(chat_id),
+                          'caption':(caption or 'Nicole recreation finished. Original soundtrack restored. 480p staging.')[:1024],
+                          'supports_streaming':'true'},
+                    files={'video':('Nicole-Recreation.mp4',body,'video/mp4')},
+                    timeout=(20,240))
+                # HTTP errors are explicit Telegram rejection, network exceptions
+                # can be uncertain and must NEVER be retried automatically.
+                info=response.json()
+            except (requests.RequestException,ValueError) as exc:
+                raise RuntimeError('Telegram multipart delivery outcome uncertain: '+
+                                   type(exc).__name__) from None
+        if not info.get('ok'):
+            reason=str(info.get('description') or 'Telegram rejected upload')
+            raise RuntimeError('Telegram multipart sendVideo refused: '+reason[:250])
+        result=info.get('result') or {}
+        if not result.get('message_id'):
+            raise RuntimeError('Telegram delivery returned no message ID; manual review required')
+        logger.info('TELEGRAM_ARCHIVE_UPLOAD success=true bytes=%d message_id=%s',
+                    size,result['message_id'])
+        return result
+
 def say(chat,text):
     return telegram('sendMessage',{'chat_id':chat,'text':text[:4096]})
 
