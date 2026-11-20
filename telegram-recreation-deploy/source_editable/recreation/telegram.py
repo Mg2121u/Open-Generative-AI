@@ -52,7 +52,9 @@ def show(job):
         f'Stage: {job["stage"]}\n'
         f'Character: {job["character"]} | Model: {job["model"]} | 480p\n'
         f'Quality: {"identity-lock / no warping" if os.getenv("RECREATION_QUALITY_MODE","").lower()=="identity_lock" else "standard"}\n'
-        f'Scenery: {job["scenery"]}\nClothes: {job["outfit"]}\nVoice: ElevenLabs v4 · {job.get("voiceover_voice", "AUTO")} · {"on" if job.get("voiceover_text") else "off (original audio)"}\n'
+        f'Scenery: {job["scenery"]}\n'
+        f'Scenery image: {((job.get("checkpoint") or {}).get("scenery_reference") or {}).get("status","none")}\n'
+        f'Clothes: {job["outfit"]}\nVoice: ElevenLabs v4 · {job.get("voiceover_voice", "AUTO")} · {"on" if job.get("voiceover_text") else "off (original audio)"}\n'
         f'Source archive: {"saved" if job.get("original_key") else "not yet stored"}\n'
         f'Nicole identity: {((job.get("checkpoint") or {}).get("identity") or {}).get("status", "missing")}\n'
         f'Generated sections: {saved} / {job["segment_total"] or "pending plan"}\n'
@@ -61,6 +63,20 @@ def show(job):
         + ('\\nQA: owner accepted a failed face match (NOT verified)' if
            ((job.get('checkpoint') or {}).get('quality_override') or {}).get('type')=='owner_accepted_facial_mismatch'
            else ''))
+
+
+def _image_attachment(message, *, allow_reply=False):
+    """Select Telegram image photo or JPEG/PNG/WEBP document, never video."""
+    attached=message
+    if allow_reply and not message.get('photo') and not (
+        (message.get('document') or {}).get('mime_type','').lower().startswith('image/')):
+        attached=message.get('reply_to_message') or {}
+    photos=attached.get('photo') or []
+    if photos:return photos[-1]
+    document=attached.get('document') or {}
+    if document.get('mime_type','').lower() in ('image/jpeg','image/png','image/webp'):
+        return document
+    return None
 
 
 def process_message(message):
@@ -78,7 +94,7 @@ def process_message(message):
     if not ALLOWED_USERS or int(owner) not in ALLOWED_USERS:
         say(chat,'This app is private. Send /id to retrieve your ID for access.'); return
     if cmd in ('/start','/help'):
-        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description>\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept mismatched face and deliver, no Wan cost\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
+        say(chat,'Video Recreation Studio (continuous mode)\n/id — show your Telegram ID\n/new — new job\n/redo — new quality redo from latest completed video (no upload)\n/segments [job8] — list saved sections and time ranges\n/view_segment [job8] N — preview one saved section\n/redo_segment [job8] N — draft replacement of only section N (NO CHARGE)\n/confirm_segment — approve ONE paid Wan generation and final reassembly\nSend an MP4 video or video document\n/character Nicole | Aria | Aria_Nicole\n/scenery <description> or photo with caption /scenery or reply /scenery to photo\n/scenery — arm the NEXT photo as a scenery reference\n/clothes <description>\n/instructions <extra requirements>\n/model wan-3.0 (original reference pipeline)\n/voice Nicole | Aria | Auto — selected voice\n/voiceover <text> — optional spoken overlay\n/voiceover off — original audio only\n/status — saved progress\n/archive — save original video in private storage (no AI calls)\n/preflight — trim and merge a short source preview locally (no AI calls)\n/fullplan — full source duration, segments and estimated cost (no AI calls)\n/identity — attach a clear Nicole reference photo with caption /identity, or reply /identity to a photo\n/generate — start paid quality run\n/salvage — assemble already-paid segments (no new Wan calls)\n/review_qa JOB8 — preview a face-QA rejected clip\n/approve_qa JOB8 — accept mismatched face and deliver, no Wan cost\n/resume — retry a failed stage\n/cancel — cancel job\n\n480p default. Source movement and original audio are preserved as targets.')
         return
     if cmd=='/new':
         job=db.create_draft(chat,owner)
@@ -181,6 +197,9 @@ def process_message(message):
         return
     job=db.latest_job(owner)
     if cmd=='/confirm_segment':
+        if job and ((job.get('checkpoint') or {}).get('scenery_reference') or {}).get('status') in ('awaiting','pending','failed'):
+            say(chat,'Scenery image is not archived yet. Finish sending /scenery photo and confirm it is ready in /status before paying.')
+            return
         if not job or job.get('stage')!='SEGMENT_REDO':
             say(chat,'Create a section draft first with /redo_segment f6634b83 3.');return
         if os.getenv('ENABLE_PAID_GENERATION','false').lower()!='true':
@@ -199,6 +218,43 @@ def process_message(message):
     if incoming_video and (not job or job.get('state')!='DRAFT'):
         fresh=db.create_draft(chat,owner)
         job=db.get_job(fresh,owner)
+    # A photo may be sent together with caption /scenery, as a REPLY to a
+    # previously sent photo, or as the next message after bare /scenery.
+    scene_status=(((job or {}).get('checkpoint') or {}).get('scenery_reference') or {}).get('status')
+    selected_photo=_image_attachment(message,allow_reply=(cmd=='/scenery'))
+    if cmd=='/scenery' and not selected_photo and not value.strip():
+        if not job or job.get('state')!='DRAFT':
+            say(chat,'Scenery reference can only be changed in an editable draft. Use /new or /redo.')
+            return
+        if db.await_scenery_image(job['job_id'],owner):
+            say(chat,'Send the scenery photo next (JPEG, PNG, WEBP, max 10 MB), '
+                'or send a photo with caption /scenery. This replaces the background '
+                'reference only. No paid AI call yet.')
+        else:
+            say(chat,'Unable to arm scenery image on this draft.')
+        return
+    if selected_photo and (cmd=='/scenery' or (scene_status=='awaiting' and not cmd.startswith('/'))):
+        if not job or job.get('state')!='DRAFT':
+            say(chat,'Scenery image can only be changed on an editable draft. Use /new or /redo.')
+            return
+        if selected_photo.get('file_size',0)>10_000_000:
+            say(chat,'Scenery image must be under 10 MB. Send a JPEG, PNG or WEBP.')
+            return
+        details=value.strip() if cmd=='/scenery' else (message.get('caption') or '').strip()
+        if not db.record_scenery_image(job['job_id'],owner,selected_photo['file_id'],details):
+            say(chat,'Could not save scenery reference to this draft.')
+            return
+        try:
+            subprocess.Popen([sys.executable,'-m','recreation.scenery_ingest_once',
+                              str(job['job_id'])],close_fds=True)
+            say(chat,'Scenery image received. Archiving it privately. Check /status '
+                'for Scenery image: ready before /generate or /confirm_segment. '
+                'Nicole identity and original audio stay unchanged. No AI charge.')
+        except Exception:
+            logger.exception('Scenery upload subprocess failed')
+            say(chat,'Scenery image recorded but archiving did not start. '
+                'Resend the photo with caption /scenery. No paid request was made.')
+        return
     if cmd=='/status': say(chat,show(job));return
     if not job:
         say(chat,'Send /new first.');return
@@ -305,6 +361,11 @@ def process_message(message):
             say(chat, 'Full-video plan unavailable: '+str(exc)[:350])
         return
     if cmd=='/generate':
+        if (((job.get('checkpoint') or {}).get('scenery_reference') or {}).get('status')
+                in ('awaiting','pending','failed')):
+            say(chat,'Scenery photo must finish archiving before paid generation. '
+                'Check /status for Scenery image: ready, or use /scenery keep source scenery to clear it.')
+            return
         if os.getenv('ENABLE_PAID_GENERATION','false').lower()!='true':
             say(chat,'Paid generation is disabled in staging. Your video can be archived without starting Wan 3.0.');return
         if job.get('character')!='NICOLE':
