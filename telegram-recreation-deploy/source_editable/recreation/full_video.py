@@ -629,8 +629,12 @@ def _deliver_once(job, key, *, delivery_key=None, caption=None):
     if not reserved:
         raise provider.NeedsReview('Telegram delivery was reserved by another worker')
     try:
-        result=telegram.telegram('sendVideo',{'chat_id':job['chat_id'], 'video':storage.presign(key,3600),
-            'caption':(caption or 'Nicole recreation finished. Original soundtrack restored. 480p staging.')})
+        # Upload the actual private MP4 bytes rather than asking Telegram to
+        # fetch an ephemeral S3 URL. This supports finished 38 MB videos
+        # without the stricter remote-URL file-size limitation.
+        result=telegram.send_archived_video(
+            job['chat_id'],key,
+            caption=(caption or 'Nicole recreation finished. Original soundtrack restored. 480p staging.'))
         db.external_finished(job_id,delivery_key,{'message_id':result.get('message_id')})
     except Exception as exc:
         raise provider.NeedsReview('Final file archived, but Telegram delivery needs manual inspection') from exc
