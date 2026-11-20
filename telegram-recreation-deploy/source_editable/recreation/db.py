@@ -57,6 +57,7 @@ def create_redo_from_latest(chat_id, owner_id):
               AND original_key IS NOT NULL
               AND checkpoint#>>'{identity,status}'='ready'
               AND checkpoint#>>'{identity,nicole_image_key}' IS NOT NULL
+              AND checkpoint->'scene_repair' IS NULL
             ORDER BY created_at DESC LIMIT 1""", (owner_id,)).fetchone()
         if not previous:
             return None
@@ -83,64 +84,6 @@ def create_redo_from_latest(chat_id, owner_id):
 
 
 
-def create_scene_fix(chat_id,owner_id,source_prefix):
-    """An UNBILLED local background repair of one owner's completed video.
-
-    Parent media and model spend records are immutable. The isolated worker
-    handles the matting/composite and private Telegram preview delivery.
-    """
-    import re
-    from . import full_video
-    prefix=str(source_prefix or '').lower()
-    if not re.fullmatch(r'[0-9a-f]{8}',prefix):
-        raise ValueError('Use /fix_scenery followed by the original eight-character job ID')
-    with connect() as conn:
-        parents=conn.execute("""SELECT * FROM recreation_jobs
-             WHERE owner_id=%s AND left(job_id::text,8)=%s
-               AND state='COMPLETED' AND stage='DONE'
-               AND character='NICOLE'
-               AND original_key IS NOT NULL
-               AND checkpoint#>>'{identity,status}'='ready'
-               AND checkpoint#>>'{scenery_reference,status}'='ready'
-               AND checkpoint#>>'{scenery_reference,scenery_image_key}' IS NOT NULL
-               AND checkpoint#>>'{local_preflight,source_key}'=original_key
-               AND checkpoint->'scene_repair' IS NULL
-             LIMIT 2""",(owner_id,prefix)).fetchall()
-        if len(parents)!=1:
-            raise ValueError('No uniquely identified completed Nicole job with a saved scenery photo was found')
-        p=parents[0]
-        cp=p.get('checkpoint') or {}
-        existing=conn.execute("""SELECT job_id,state FROM recreation_jobs
-             WHERE owner_id=%s
-               AND checkpoint#>>'{scene_repair,parent_job_id}'=%s
-               AND state IN ('QUEUED','RUNNING','WAITING_PROVIDER')
-             ORDER BY created_at DESC LIMIT 1""",(owner_id,str(p['job_id']))).fetchone()
-        if existing:
-            return {'job_id':str(existing['job_id']),'from_job':str(p['job_id']),
-                    'already_queued':True}
-        new_id=uuid.uuid4()
-        derived_cp={
-            'identity':cp['identity'],
-            'scenery_reference':cp['scenery_reference'],
-            'local_preflight':cp['local_preflight'],
-            'scene_repair':{
-                'parent_job_id':str(p['job_id']),
-                'parent_run_key':full_video.RUN_KEY,
-                'mode':'strict_local_matte_preview_v1'
-            }
-        }
-        conn.execute("""INSERT INTO recreation_jobs
-             (job_id,chat_id,owner_id,character,model,source_file_id,
-              original_key,scenery,outfit,instructions,voiceover_voice,
-              checkpoint,stage,state,segment_total,current_segment)
-             VALUES (%s,%s,%s,'NICOLE','wan-3.0',%s,
-                     %s,%s,%s,%s,%s,%s,'SCENE_FIX','QUEUED',0,0)""",(
-             new_id,chat_id,owner_id,p.get('source_file_id'),
-             p['original_key'],p['scenery'],p['outfit'],
-             p['instructions'],p['voiceover_voice'],Jsonb(derived_cp)))
-        return {'job_id':str(new_id),'from_job':str(p['job_id']),
-                'already_queued':False}
-
 def completed_segment_job(owner_id, prefix=None):
     """Resolve a completed OWNED video, not a prior revision or somebody else's.
 
@@ -158,6 +101,7 @@ def completed_segment_job(owner_id, prefix=None):
               AND checkpoint#>>'{identity,status}'='ready'
               AND checkpoint#>>'{local_preflight,source_key}'=original_key
               AND checkpoint->'segment_revision' IS NULL
+              AND checkpoint->'scene_repair' IS NULL
               AND (%s::text IS NULL OR left(job_id::text,8)=%s::text)
             ORDER BY created_at DESC LIMIT 2""",
             (owner_id,prefix,prefix)).fetchall()
@@ -639,7 +583,7 @@ def claim_app(worker,seconds=240):
     with connect() as conn:
         return conn.execute("""WITH selected AS (
             SELECT job_id FROM recreation_jobs WHERE owner_id=ANY(%s::bigint[])
-            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE','SEGMENT_REDO','QA_OWNER_APPROVED','SCENE_FIX')
+            AND stage IN ('INGEST','UPLOAD_REFERENCE','AUTO_PREFLIGHT','AUTO_GENERATE','LOCAL_PREFLIGHT','SALVAGE','SEGMENT_REDO','QA_OWNER_APPROVED')
             AND state IN ('QUEUED','RUNNING','WAITING_PROVIDER')
             AND next_attempt_at<=now()
             AND (lease_until IS NULL OR lease_until<now())
