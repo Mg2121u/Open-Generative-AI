@@ -339,12 +339,79 @@ def qa_review_job(owner_id, job_prefix):
         rows=conn.execute("""SELECT * FROM recreation_jobs
             WHERE owner_id=%s AND left(job_id::text,8)=%s
               AND state='NEEDS_REVIEW' AND stage='AUTO_GENERATE'
-              AND character='NICOLE' AND segment_total=1
-              AND last_error LIKE 'Nicole facial identity QA mismatch:%%'
+              AND character='NICOLE' AND segment_total>=1
+              AND (last_error LIKE 'Nicole facial identity QA mismatch:%%'
+                   OR last_error LIKE 'Nicole facial identity QA unverified:%%')
             LIMIT 2""",(owner_id,job_prefix.lower())).fetchall()
     if len(rows)>1:
         raise ValueError('Job ID prefix is not unique')
     return rows[0] if rows else None
+
+
+
+def auto_provider_steps(job_id):
+    """All saved Wan requests for the *current* run; preserve their IDs."""
+    from .full_video import RUN_KEY
+    with connect() as conn:
+        return conn.execute("""SELECT step_key,state,external_request_id
+            FROM recreation_steps WHERE job_id=%s AND step_key LIKE %s
+            ORDER BY step_key""",
+            (job_id,f'wan_{RUN_KEY}_segment_%')).fetchall()
+
+
+def approve_qa_continue(job_id,owner_id,*,index,expected_step,expected_key,qa_status):
+    """Owner accepts one archived failed-face clip and resumes remaining sections.
+
+    Absolutely no step reset and no re-submission of paid original segments.
+    """
+    from .full_video import RUN_KEY,segment_key,step_key
+    if not isinstance(index,int) or not 0<=index<2400:
+        raise ValueError('Invalid section index')
+    if (expected_step!=step_key(index) or
+            expected_key!=segment_key(str(job_id),index) or
+            qa_status not in ('mismatch','unverified')):
+        raise ValueError('Approval is restricted to one exact archived paid clip')
+    pattern=f'wan_{RUN_KEY}_segment_%'
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs AS j
+          SET state='QUEUED',stage='AUTO_GENERATE',attempt=0,
+              next_attempt_at=now(),lease_until=NULL,lease_owner=NULL,
+              last_error=NULL,
+              checkpoint=jsonb_set(COALESCE(j.checkpoint,'{}'::jsonb),
+                  '{face_qa_approvals}',
+                  COALESCE(j.checkpoint->'face_qa_approvals','{}'::jsonb)
+                   || jsonb_build_object(%s::text,
+                        jsonb_build_object(
+                          'type','owner_accepted_facial_mismatch_for_continuation',
+                          'owner_id',%s::bigint,
+                          'segment_key',%s::text,'source_step',%s::text,
+                          'accepted_status',%s::text,
+                          'original_failure',j.last_error,
+                          'approved_at',to_char(now() AT TIME ZONE 'UTC',
+                               'YYYY-MM-DD"T"HH24:MI:SS"Z"'))),
+                  true),
+              updated_at=now()
+          WHERE j.job_id=%s AND j.owner_id=%s
+            AND j.state='NEEDS_REVIEW' AND j.stage='AUTO_GENERATE'
+            AND j.character='NICOLE' AND j.segment_total>1
+            AND j.segment_total>%s AND j.original_key IS NOT NULL
+            AND j.checkpoint#>>'{identity,status}'='ready'
+            AND j.checkpoint#>>'{local_preflight,source_key}'=j.original_key
+            AND j.last_error LIKE %s
+            AND EXISTS (SELECT 1 FROM recreation_steps s
+                 WHERE s.job_id=j.job_id AND s.step_key=%s
+                   AND s.state='COMPLETED'
+                   AND NULLIF(s.external_request_id,'') IS NOT NULL)
+            AND (SELECT COUNT(*) FROM recreation_steps s
+                 WHERE s.job_id=j.job_id AND s.step_key LIKE %s)=%s
+            AND NOT EXISTS (SELECT 1 FROM recreation_steps s
+                 WHERE s.job_id=j.job_id AND s.step_key LIKE %s
+                   AND s.state!='COMPLETED')
+            RETURNING j.*""",
+            (str(index),owner_id,expected_key,expected_step,qa_status,
+             job_id,owner_id,index,
+             'Nicole facial identity QA '+qa_status+':%',
+             expected_step,pattern,index+1,pattern)).fetchone()
 
 
 def approve_qa_review(job_id, owner_id, *, expected_step):
