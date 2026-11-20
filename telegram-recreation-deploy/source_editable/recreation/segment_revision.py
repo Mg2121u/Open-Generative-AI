@@ -56,6 +56,11 @@ def _validate(job):
     if (len(plan)!=int(parent.get('segment_total') or 0)
             or not 0<=index<len(plan) or int(revision.get('parent_sections') or 0)!=len(plan)):
         raise provider.NeedsReview('Original section plan mismatch; no paid model call')
+    scene=quality.scene_reference(job)
+    if scene.get('status') in ('awaiting','pending','failed'):
+        raise provider.NeedsReview('Scenery image not ready; finish /scenery before paying')
+    if scene.get('status')=='ready' and not scene.get('scenery_image_key'):
+        raise provider.NeedsReview('Scenery image key missing; no paid request')
     if len(plan)>120 or job.get('segment_total')!=1:
         raise provider.NeedsReview('Invalid section count for single-section revision')
     # No generation until all original clips AND the exact motion interval
@@ -92,7 +97,10 @@ def _verified_existing_step(job,step,index,parent):
     vids=payload.get('reference_videos') or []
     identity=(parent['checkpoint']['identity'])['nicole_image_key']
     motion=full_video.source_key(str(parent['job_id']),index)
-    if (len(pics) not in (1,2) or len(vids)!=1
+    scene=quality.scene_reference(job)
+    scene_key=scene.get('scenery_image_key') if scene.get('status')=='ready' else None
+    scene_ok=(not scene_key or (len(pics)>=2 and scene_key in unquote(urlsplit(pics[-1]).path)))
+    if (len(pics) not in (1,2,3) or len(vids)!=1 or not scene_ok
             or identity not in unquote(urlsplit(pics[0]).path)
             or motion not in unquote(urlsplit(vids[0]).path)):
         raise provider.NeedsReview('Saved Wan request used unexpected identity/motion references')
@@ -110,14 +118,28 @@ def run(job):
             clip=(parent.get('checkpoint') or {})['local_preflight']['source_probe']
             identity=(parent.get('checkpoint') or {})['identity']['nicole_image_key']
             refs=[storage.presign(identity,3600)]
+            face_anchor=False
             if os.getenv('RECREATION_FACE_QA_MODE','on').lower()!='off':
                 anchor=identity_qa.prepare_anchor(job)
                 refs.append(storage.presign(anchor,3600))
+                face_anchor=True
+            scene=quality.scene_reference(job)
+            scene_number=None
+            if scene.get('status')=='ready':
+                scene_key=scene['scenery_image_key']
+                if not full_video._stored(scene_key):
+                    raise provider.NeedsReview('Archived scenery reference is missing; no paid regeneration')
+                scene_number=len(refs)+1
+                if scene_number>3:
+                    raise provider.NeedsReview('Scenery image would exceed model reference limit')
+                refs.append(storage.presign(scene_key,3600))
             payload=wan_canary.payload_for(
                 storage.presign(motion,3600),
                 clip['width'],clip['height'],refs
             )
-            payload['prompt']=quality.build_prompt(job,chained=False)
+            payload['prompt']=quality.build_prompt(
+                job,chained=False,scene_image_number=scene_number,
+                face_anchor_present=face_anchor)
             payload['seed']=quality.fixed_seed(job)
             payload['duration']=segments[index]['output_seconds']
             payload['generate_audio']=False
