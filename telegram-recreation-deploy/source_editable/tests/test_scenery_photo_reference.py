@@ -38,13 +38,15 @@ def staged_scene(**overrides):
 def test_scene_is_never_an_identity_reference_in_prompt():
     job=staged_scene()
     prompt=quality.build_prompt(job,scene_image_number=3)
-    assert 'Image 3' in prompt
-    assert 'BACKGROUND/LOCATION ONLY' in prompt
-    assert 'Image 1 alone defines Nicole' in prompt
-    assert 'never copy or blend their face' in prompt
-    assert 'Video 1 supplies the choreography' in prompt
+    assert 'IMAGE 1: Original canonical NICOLE FULL-BODY IDENTITY AND WARDROBE' in prompt
+    assert 'IMAGE 2: CLOSE-UP OF THE EXACT SAME NICOLE FACE' in prompt
+    assert 'IMAGE 3 IS THE EXCLUSIVE ENVIRONMENT AND SCENERY AUTHORITY' in prompt
+    assert 'VIDEO 1: ORIGINAL REFERENCE CLIP' in prompt
+    assert 'Never inherit the background from either Nicole image or Video 1' in prompt
+    assert 'Do not paste a foreground cutout onto a still picture' in prompt
     assert 'warm evening garden' in prompt
-    with pytest.raises(ValueError,match='Scenery image'):
+    assert 'outfit shown on her canonical full-body reference' in prompt
+    with pytest.raises(ValueError,match='Photo scenery requires canonical'):
         quality.build_prompt(job,scene_image_number=None)
 
 
@@ -129,20 +131,21 @@ def test_storage_role_cannot_be_silently_swapped(monkeypatch):
     assert roles==['scenery','identity']
 
 
-def test_3_references_sent_to_wan_in_correct_order(monkeypatch):
+@pytest.mark.parametrize('face_qa_mode',['on','off'])
+def test_3_references_sent_to_wan_in_correct_order(monkeypatch,face_qa_mode):
     job=staged_scene()
     monkeypatch.setenv('RECREATION_QUALITY_MODE','identity_lock')
     monkeypatch.setenv('RECREATION_IDENTITY_ANCHOR','canonical')
-    monkeypatch.setenv('RECREATION_FACE_QA_MODE','on')
+    monkeypatch.setenv('RECREATION_FACE_QA_MODE',face_qa_mode)
     segment={'index':0,'start':0,'duration':8.,'output_seconds':8,
              'estimated_usd':.8,'reused':False}
     monkeypatch.setattr(full_video,'_guard_auto',lambda j:{'segments':[segment]})
     monkeypatch.setattr(full_video.db,'get_job',lambda *_:job)
     monkeypatch.setattr(full_video.db,'get_step',lambda *_:None)
     monkeypatch.setattr(full_video,'_stored',lambda key:key=='private/scenery.jpg')
-    monkeypatch.setattr(full_video,'_prepare_reference',lambda *a:'motion/seg.mp4')
+    monkeypatch.setattr(full_video,'_prepare_reference',lambda *a:full_video.source_key(job['job_id'],0))
     monkeypatch.setattr(full_video.identity_qa,'prepare_anchor',
-                        lambda *a:'private/nicole_face.jpg')
+                        lambda *a:f'recreation/{job["job_id"]}/identity/nicole_face_closeup_v1.jpg')
     monkeypatch.setattr(full_video.storage,'presign',
                         lambda key,seconds:'https://scene.example/'+key)
     payloads=[]
@@ -155,8 +158,8 @@ def test_3_references_sent_to_wan_in_correct_order(monkeypatch):
     assert full_video.run_auto(job)=='processing'
     imgs=payloads[0]['reference_images']
     assert [url.rsplit('/',1)[-1] for url in imgs]==[
-        'nicole.jpg','nicole_face.jpg','scenery.jpg']
-    assert 'Image 3' in payloads[0]['prompt']
+        'nicole.jpg','nicole_face_closeup_v1.jpg','scenery.jpg']
+    assert 'IMAGE 3' in payloads[0]['prompt']
     assert len(payloads[0]['reference_videos'])==1
 
 
@@ -178,7 +181,7 @@ def test_single_section_redo_sends_same_three_image_references(monkeypatch):
                         lambda key:key=='private/scenery.jpg')
     monkeypatch.setattr(segment_revision.db,'get_step',lambda *a:None)
     monkeypatch.setattr(segment_revision.identity_qa,'prepare_anchor',
-                        lambda _: 'private/nicole_face.jpg')
+                        lambda _:f'recreation/{j["job_id"]}/identity/nicole_face_closeup_v1.jpg')
     monkeypatch.setattr(segment_revision.storage,'presign',
                         lambda key,ttl:'https://scene.example/'+key)
     payloads=[]
