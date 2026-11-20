@@ -120,7 +120,7 @@ def test_owner_archive_delivery_queue_requires_failed_telegram_and_all_paid_step
     assert "t.state IN ('SUBMITTING','UNCERTAIN','FAILED')" in sql
     assert "s.state='COMPLETED'" in sql
     assert "s.state!='COMPLETED'" in sql
-    assert 'multipart_v1' in params[3]
+    assert 'multipart_v1' in params[4]
     assert params[0]==123 and params[1]=='32e09922'
     with pytest.raises(ValueError):
         db.queue_archive_delivery(123,'invalid')
