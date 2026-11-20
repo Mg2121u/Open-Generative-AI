@@ -476,10 +476,12 @@ def auto_recover_finished_uploads():
                 updated_at=now()
             WHERE j.owner_id=ANY(%s::bigint[]) AND j.character='NICOLE'
               AND j.stage='AUTO_GENERATE'
-              AND j.state IN ('FAILED','NEEDS_REVIEW')
+              AND j.state IN ('FAILED','NEEDS_REVIEW','QUEUED','WAITING_PROVIDER')
               AND j.lease_owner IS NULL
               AND (j.lease_until IS NULL OR j.lease_until<now())
-              AND j.last_error LIKE 'Processing stage failed: S3UploadFailedError%%'
+              AND (j.last_error LIKE 'Processing stage failed: S3UploadFailedError%%'
+                   OR j.last_error LIKE 'Final MP4%%'
+                   OR j.checkpoint#>>'{final_recovery,owner_requested}'='true')
               AND COALESCE(j.checkpoint#>>'{final_recovery,auto_attempted}','false')!='true'
               AND j.segment_total>0 AND j.original_key IS NOT NULL
               AND j.checkpoint#>>'{local_preflight,source_key}'=j.original_key
@@ -493,6 +495,46 @@ def auto_recover_finished_uploads():
                      AND s.state!='COMPLETED')
             RETURNING j.job_id,j.segment_total""",
             (owners,pattern,pattern)).fetchall()
+
+
+def defer_final_assembly(owner_id,job_prefix):
+    """Remember /finish when the final assembled video is already in progress.
+
+    DO NOT change a running job's lease, stage, state, or paid steps.
+    A follow-on watchdog will switch to local-only recovery if the active
+    assembly fails; successful completion needs no extra work.
+    """
+    import re
+    from .full_video import RUN_KEY
+    prefix=str(job_prefix or '').lower()
+    if not re.fullmatch(r'[0-9a-f]{8}',prefix):
+        raise ValueError('Use /finish followed by an eight-character job ID')
+    pattern=f'wan_{RUN_KEY}_segment_%'
+    with connect() as conn:
+        return conn.execute("""UPDATE recreation_jobs AS j
+            SET checkpoint=jsonb_set(COALESCE(j.checkpoint,'{}'::jsonb),
+                '{final_recovery}',
+                COALESCE(j.checkpoint->'final_recovery','{}'::jsonb)
+                   || jsonb_build_object('owner_requested',true,
+                       'requested_at',to_char(now() AT TIME ZONE 'UTC',
+                                            'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
+                true),updated_at=now()
+            WHERE j.owner_id=%s AND left(j.job_id::text,8)=%s
+              AND j.character='NICOLE' AND j.stage='AUTO_GENERATE'
+              AND j.state='RUNNING'
+              AND j.lease_owner IS NOT NULL AND j.lease_until>now()
+              AND j.segment_total>0 AND j.original_key IS NOT NULL
+              AND j.checkpoint#>>'{local_preflight,source_key}'=j.original_key
+              AND j.checkpoint#>>'{identity,status}'='ready'
+              AND (SELECT count(*) FROM recreation_steps s
+                   WHERE s.job_id=j.job_id AND s.step_key LIKE %s
+                     AND s.state='COMPLETED'
+                     AND NULLIF(s.external_request_id,'') IS NOT NULL)=j.segment_total
+              AND NOT EXISTS (SELECT 1 FROM recreation_steps s
+                   WHERE s.job_id=j.job_id AND s.step_key LIKE %s
+                     AND s.state!='COMPLETED')
+            RETURNING j.job_id,j.segment_total,j.stage,j.state""",
+            (owner_id,prefix,pattern,pattern)).fetchone()
 
 
 def queue_final_assembly(owner_id, job_prefix):
