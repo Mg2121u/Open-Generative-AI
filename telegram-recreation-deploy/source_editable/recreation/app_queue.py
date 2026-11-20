@@ -6,7 +6,7 @@ are reserved in recreation_steps, preventing duplicate charges after restart.
 import logging
 import tempfile
 from pathlib import Path
-from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision,qa_owner_approval,final_archive_recovery
+from . import db,ffmpeg,storage,telegram,full_video,preflight,segment_revision,qa_owner_approval,final_archive_recovery,archived_delivery
 
 LOG=logging.getLogger('app-queue')
 
@@ -66,6 +66,18 @@ def process(job):
             telegram.say(job['chat_id'],f'Nicole generation started. {len(plan["segments"])} segments, '
                 f'estimated additional WaveSpeed charge ${plan["remaining_estimate_usd"]:.2f} '
                 '(actual provider billing may vary). Original audio will be preserved. /status tracks progress.')
+        return
+    if stage=='ARCHIVE_DELIVER':
+        # Owner approval permits one multipart upload of the existing final
+        # S3 archive. Never call paid Wan or re-run FFmpeg.
+        result=archived_delivery.run(job)
+        if result!='completed':
+            raise RuntimeError('Unexpected archived delivery state')
+        done=_next(job,stage='DONE',state='COMPLETED',
+                   current_segment=job['segment_total'],
+                   event=('archive_delivered',
+                          'Existing final MP4 delivered using multipart; no AI generation'))
+        if done:LOG.info('ARCHIVE_DELIVER job=%s delivered=true wan_calls=0',job_id[:8])
         return
     if stage=='FINAL_ASSEMBLE':
         # All 27 Wan requests are already complete and immutable. This
