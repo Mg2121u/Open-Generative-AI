@@ -5,7 +5,7 @@ WORKDIR /service
 RUN pip install --no-cache-dir torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py .
+COPY app.py local_store.py ./
 RUN useradd -m -u 10001 worker && mkdir -p /data/hf && chown worker:worker /data/hf
 USER worker
 EXPOSE 8000

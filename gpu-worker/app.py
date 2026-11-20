@@ -111,6 +111,10 @@ def init():
 
 @app.on_event("startup")
 def startup():
+    global pool
+    # Each ASGI lifecycle needs its own executor; prior test clients
+    # shutdown the previous executor on exit.
+    pool = ThreadPoolExecutor(max_workers=1)
     threading.Thread(target=init, daemon=True).start()
 
 @app.on_event("shutdown")
@@ -176,6 +180,7 @@ def create_job(payload: Job):
                            "updated_at":utcnow(), "assets_keys":[], "error":None})
         pool.submit(render, job_id, payload)
     except Exception:
+        log.exception("Unable to save or schedule job")
         with lock:
             queue_depth -= 1
         raise HTTPException(503, "Unable to save job")
