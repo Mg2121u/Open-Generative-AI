@@ -24,8 +24,8 @@ def probe(file):
 def trim(source,output,start,duration):
     if float(start)<0 or float(duration)<=0: raise ValueError('Invalid trim interval')
     run('ffmpeg','-hide_banner','-loglevel','error','-y',
-        '-threads','1','-filter_threads','1','-ss',str(start),'-i',str(source),'-t',str(duration),
-        '-map','0:v:0','-an','-vf',"scale=trunc(iw/2)*2:trunc(ih/2)*2",'-c:v','libx264','-threads','1','-preset','veryfast','-crf','17',
+        '-threads','1','-filter_threads','1','-filter_complex_threads','1','-ss',str(start),'-i',str(source),'-t',str(duration),
+        '-map','0:v:0','-an','-vf',"scale=480:854:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=480:854:(ow-iw)/2:(oh-ih)/2,setsar=1",'-c:v','libx264','-threads','1','-preset','ultrafast','-crf','20',
         '-pix_fmt','yuv420p','-movflags','+faststart',str(output))
     return probe(output)
 
