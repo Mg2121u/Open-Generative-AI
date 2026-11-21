@@ -17,6 +17,7 @@ RUN printf '\\n=== FULL VIDEO STEP AND AUTO FLOW ===\\n' && grep -n -E '^def (st
 RUN pip install --no-cache-dir -r requirements.txt
 RUN PYTHONPATH=/app python -c "from recreation.identity_qa import install_models; install_models()"
 RUN RECREATION_RUN_KEY=nonsecret_probe_key PYTHONPATH=/app python -c "from recreation import full_video; assert full_video.RUN_KEY == 'nonsecret_probe_key'; assert full_video._reusable_canary({}) is False; print('RECREATION_RUNTIME_NAMESPACE_TEST passed=true')"
+RUN PYTHONPATH=/app python -c "import inspect; from recreation import ffmpeg; assert 'exit=' in inspect.getsource(ffmpeg.run); assert 'filter_threads' in inspect.getsource(ffmpeg.trim); print('FFMPEG_RESOURCE_PATCH_VERIFIED')"
 RUN PYTHONPATH=/app pytest -q /app/tests
 RUN python -c "from recreation.main import app; assert app.title == 'Telegram Recreation Studio'"
 # Nonsecret diagnostic for the two spending-cap parsing sites and job review workflow.
