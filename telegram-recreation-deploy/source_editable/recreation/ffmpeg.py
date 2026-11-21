@@ -6,7 +6,9 @@ from pathlib import Path
 
 def run(*args,timeout=600):
     p=subprocess.run(args,capture_output=True,text=True,timeout=timeout)
-    if p.returncode: raise RuntimeError((p.stderr or '')[-1200:])
+    if p.returncode:
+        detail=(p.stderr or '').strip()[-1200:] or 'no stderr; process may have been terminated by resource limits'
+        raise RuntimeError(f'{args[0]} exit={p.returncode}: {detail}')
     return p.stdout
 
 
@@ -22,8 +24,8 @@ def probe(file):
 def trim(source,output,start,duration):
     if float(start)<0 or float(duration)<=0: raise ValueError('Invalid trim interval')
     run('ffmpeg','-hide_banner','-loglevel','error','-y',
-        '-ss',str(start),'-i',str(source),'-t',str(duration),
-        '-map','0:v:0','-an','-c:v','libx264','-preset','medium','-crf','17',
+        '-threads','1','-filter_threads','1','-ss',str(start),'-i',str(source),'-t',str(duration),
+        '-map','0:v:0','-an','-vf',"scale=trunc(iw/2)*2:trunc(ih/2)*2",'-c:v','libx264','-threads','1','-preset','veryfast','-crf','17',
         '-pix_fmt','yuv420p','-movflags','+faststart',str(output))
     return probe(output)
 
